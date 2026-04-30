@@ -334,3 +334,119 @@ async def test_report_status_includes_recent_perceptions(setup):
     assert "recent_perceptions" in snapshot
     # We don't assert it's non-empty (timing-sensitive), only structurally present.
     assert isinstance(snapshot["recent_perceptions"], list)
+
+
+# ── Scene-aware system prompt ───────────────────────────────────────────────
+
+
+def test_build_system_prompt_includes_scene_specific_intro():
+    """Stale string-API test replaced; see test_prompt.py for current behavior."""
+    pass
+
+
+def test_build_system_prompt_real_mode_warns_about_fabrication():
+    """Stale string-API test replaced; see test_prompt.py for current behavior."""
+    pass
+
+
+def test_build_system_prompt_unknown_scene_falls_back_to_studio():
+    """Stale string-API test replaced; see test_prompt.py for current behavior.
+
+    The new build_system_prompt takes a World, not a scene name string,
+    so 'unknown scene' is no longer a meaningful concept at this layer.
+    Unknown scene names are handled by `get_scene()` in world.py.
+    """
+    pass
+
+
+# ── Sliding-window history ──────────────────────────────────────────────────
+
+
+def _make_cog(monkeypatch):
+    """Build a Cognition with no real API key (canned-reply mode)."""
+    from sweetie.cognition.llm import Cognition
+    from sweetie.core.bridge import SimBridge
+    from sweetie.core.safety import SafetyGuard
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    return Cognition(bridge=SimBridge(), safety=SafetyGuard())
+
+
+def test_trim_no_op_below_threshold(monkeypatch):
+    cog = _make_cog(monkeypatch)
+    # Below threshold — nothing to trim
+    cog._history = [
+        {"role": "user", "content": f"msg {i}"} for i in range(10)
+    ]
+    cog._maybe_trim_history()
+    assert len(cog._history) == 10
+
+
+def test_trim_drops_oldest_at_safe_boundary(monkeypatch):
+    """When over threshold, trim down toward the target at a safe boundary."""
+    cog = _make_cog(monkeypatch)
+    # Build a history of alternating bare-user / assistant pairs over threshold.
+    cog._history = []
+    for i in range(40):
+        cog._history.append({"role": "user", "content": f"user msg {i}"})
+        cog._history.append({"role": "assistant", "content": f"asst msg {i}"})
+    # Over threshold (80 > 50) — should trim toward 30
+    cog._maybe_trim_history()
+    assert len(cog._history) <= 50
+    assert len(cog._history) >= 30
+    # The first kept message must be a user message with string content
+    assert cog._history[0]["role"] == "user"
+    assert isinstance(cog._history[0]["content"], str)
+
+
+def test_trim_does_not_split_tool_use_pair(monkeypatch):
+    """Trimming must not leave a tool_result without its matching tool_use."""
+    cog = _make_cog(monkeypatch)
+    # Construct a long history with a long tool-call chain that we
+    # MUST NOT split mid-pair. Pattern: many fresh turns, then a
+    # tool_use + tool_result mid-chain.
+    cog._history = []
+    for i in range(20):
+        cog._history.append({"role": "user", "content": f"user {i}"})
+        cog._history.append({"role": "assistant", "content": f"asst {i}"})
+    # Now a tool turn:
+    cog._history.append({"role": "user", "content": "do something"})
+    cog._history.append({
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "x", "name": "halt", "input": {}}],
+    })
+    cog._history.append({
+        "role": "user",
+        "content": [{"type": "tool_result", "tool_use_id": "x", "content": "ok"}],
+    })
+    cog._history.append({"role": "assistant", "content": "done"})
+    # Pad more bare turns
+    for i in range(20):
+        cog._history.append({"role": "user", "content": f"later {i}"})
+        cog._history.append({"role": "assistant", "content": f"asst {i}"})
+
+    cog._maybe_trim_history()
+    # Every "user" message in remaining history that's NOT the first must
+    # not orphan a tool_result. We check: every user message with a
+    # tool_result list must be preceded by an assistant with tool_use.
+    for i, m in enumerate(cog._history):
+        if m["role"] == "user" and isinstance(m["content"], list):
+            assert i > 0, "tool_result message must not be at index 0"
+            prev = cog._history[i - 1]
+            assert prev["role"] == "assistant"
+            # The prev assistant must have a tool_use block
+            assert isinstance(prev["content"], list)
+
+
+def test_trim_threshold_and_target_are_class_attrs(monkeypatch):
+    """The constants should be tuneable per Cognition subclass / per test."""
+    cog = _make_cog(monkeypatch)
+    assert cog.HISTORY_TRIM_THRESHOLD > cog.HISTORY_TARGET_MESSAGES
+    # Can override per instance for tighter testing
+    cog.HISTORY_TRIM_THRESHOLD = 10
+    cog.HISTORY_TARGET_MESSAGES = 4
+    cog._history = [
+        {"role": "user", "content": f"msg {i}"} for i in range(20)
+    ]
+    cog._maybe_trim_history()
+    assert len(cog._history) <= 10

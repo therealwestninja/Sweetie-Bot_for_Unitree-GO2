@@ -43,67 +43,113 @@ MODEL = os.getenv("SWEETIE_MODEL", "claude-sonnet-4-5")
 MAX_TOKENS = 1024
 TOOL_LOOP_MAX = 8  # bound on tool calls per chat() to prevent runaway
 
-# Per-scene introduction. The rest of the system prompt is generic; only the
-# world-description paragraph changes based on which scene is loaded. This
-# stops the LLM from hallucinating apartment furniture in stairs-only mode.
-_SCENE_DESCRIPTIONS: dict[str, str] = {
-    "studio": (
-        'The robot is in a small simulated "studio backlot" world with '
-        "several named regions:\n\n"
-        "- An apartment area near the origin: couch, coffee table, kitchen "
-        "counter, door, rug, plus a wandering cat and a person walking a loop.\n"
-        "- A street area to the east (+x): a parked car, a fire hydrant, a "
-        "lamp post, traffic cones, a chain-link fence, sidewalk curbs.\n"
-        "- A stairs area to the north (+y): straight stair runs of 2, 3, 5, "
-        "and 8 steps, plus an L-bend staircase (2 steps up, 90° right turn "
-        "platform, then 8 more steps).\n"
-        "- An agility area to the south-west (-x, -y): a gentle slope, a "
-        "small hill, a patch of moguls, a gravel patch, plus film-industry "
-        "apple boxes in four standard sizes (full, half, quarter, eighth)."
-    ),
-    "apartment": (
-        "The robot is in a simulated apartment: couch, coffee table, kitchen "
-        "counter, door, and rug. A small black cat wanders nearby; a person "
-        "walks a loop around the apartment periphery."
-    ),
-    "street": (
-        "The robot is on a simulated street scene: a parked car, a fire "
-        "hydrant, a lamp post, four traffic cones, a chain-link fence line, "
-        "and sidewalk curb edges. No moving entities — purely static."
-    ),
-    "stairs": (
-        "The robot is in a simulated stairs practice area: straight stair "
-        "runs of 2, 3, 5, and 8 steps, plus an L-bend staircase (2 steps "
-        "up, 90° right-turn platform, then 8 more steps east). No other "
-        "objects nearby."
-    ),
-    "agility": (
-        "The robot is in a simulated agility / terrain practice area: "
-        "film-industry apple boxes in four standard sizes (full, half, "
-        "quarter, eighth) plus passable terrain — a gentle slope, a small "
-        "grassy hill, a patch of moguls, and a gravel patch."
-    ),
-    # Used when the bridge is real hardware. There's no simulated world
-    # to describe; tell the LLM not to invent one.
-    "real": (
-        "The robot is connected to real hardware. There is no simulated "
-        "world model — the bridge reports proximity readings from real "
-        "sensors and the world around the robot is whatever's actually "
-        "there. Don't fabricate descriptions of objects you can't infer "
-        "from `report_status`."
-    ),
-}
+# The scene description in the system prompt is derived from the actual
+# `World` instance — not a static lookup — so it reflects what's really
+# there. This stops the LLM from hallucinating a coffee table when
+# running in stairs-only scene, or talking about the cat fleeing in a
+# scene that has no cat.
+
+_REAL_HARDWARE_INTRO = (
+    "The robot is connected to real hardware. There is no simulated "
+    "world model — the bridge reports proximity readings from real "
+    "sensors and the world around the robot is whatever's actually "
+    "there. Don't fabricate descriptions of objects you can't infer "
+    "from `report_status`."
+)
 
 
-def build_system_prompt(scene_name: str = "studio") -> str:
+def _categorize_objects(world) -> dict[str, list]:
+    """Group a world's objects by category. Stable insertion order."""
+    groups: dict[str, list] = {}
+    for obj in world.objects:
+        groups.setdefault(obj.category, []).append(obj)
+    return groups
+
+
+def _summarize_category(category: str, objects: list) -> str:
+    """Human-readable one-liner for a category. Truncates long lists."""
+    n = len(objects)
+    names = [o.name for o in objects]
+    # For small groups, list every name. For large groups (procedural
+    # obstacle fields), give a count instead so the prompt stays compact.
+    if n <= 6:
+        listed = ", ".join(names)
+        return f"{category} ({n}): {listed}"
+    return f"{category} ({n} objects)"
+
+
+def _describe_scene_from_world(world) -> str:
+    """Build a scene-description paragraph from the live `World`.
+
+    Mentions regions if the world has any, then groups objects by
+    category. Stays compact even for procedural obstacle fields with
+    hundreds of items.
     """
-    Compose the system prompt for the given scene.
+    parts: list[str] = []
 
-    Falls back to the studio (full backlot) description if the name isn't
-    recognized — that mirrors the same fallback policy as `get_scene()`.
+    if world.regions:
+        region_names = ", ".join(r.name for r in world.regions)
+        if len(world.regions) == 1:
+            parts.append(
+                f"The robot is in a simulated '{region_names}' area."
+            )
+        else:
+            parts.append(
+                "The robot is in a simulated world with named regions: "
+                f"{region_names}."
+            )
+    else:
+        parts.append("The robot is in a simulated world.")
+
+    groups = _categorize_objects(world)
+    if not groups:
+        parts.append("The world is empty — no named objects nearby.")
+    else:
+        bullets = [
+            "- " + _summarize_category(cat, objs)
+            for cat, objs in groups.items()
+        ]
+        parts.append("Objects in the world, grouped by category:\n" + "\n".join(bullets))
+
+    return "\n\n".join(parts)
+
+
+def build_system_prompt(world=None) -> str:
     """
-    intro = _SCENE_DESCRIPTIONS.get(scene_name, _SCENE_DESCRIPTIONS["studio"])
-    return _SYSTEM_PROMPT_TEMPLATE.format(scene_intro=intro)
+    Compose the system prompt.
+
+    `world` is a `sweetie.sim.world.World` instance, or None for real
+    hardware. The scene-description paragraph is derived from the
+    world's actual contents; the rest of the prompt (tools, senses,
+    safety) is static.
+
+    Reactive-entity guidance (cat fleeing, person yielding) is included
+    only when the world actually contains those entities.
+    """
+    if world is None:
+        scene_intro = _REAL_HARDWARE_INTRO
+        reactive_paragraph = ""
+    else:
+        scene_intro = _describe_scene_from_world(world)
+        # Only include the reactive-entity guidance if the world has
+        # entities that can react. The `dynamic` flag is the marker.
+        has_dynamic = any(o.dynamic for o in world.objects)
+        if has_dynamic:
+            reactive_paragraph = (
+                "\nThe dynamic entities in this world also react to the robot. "
+                "If you get close to a small animal it may flee; if a person is "
+                "walking and you stand in their path they may pause. These "
+                "reactions are part of the simulation, not commands you sent. "
+                "If the operator's driving makes an entity flee or stop, you "
+                "can mention it.\n"
+            )
+        else:
+            reactive_paragraph = ""
+
+    return _SYSTEM_PROMPT_TEMPLATE.format(
+        scene_intro=scene_intro,
+        reactive_paragraph=reactive_paragraph,
+    )
 
 
 _SYSTEM_PROMPT_TEMPLATE = """You are Sweetie, the on-board assistant for a Unitree Go2 \
@@ -122,19 +168,14 @@ labeled for navigation/conversation, but the robot drives over them in \
 sim as if they were flat. If the operator asks 'can I climb those \
 stairs?', the honest answer is 'in the sim, you'd just glide over them; \
 real stairs traversal is a hardware/physics concern'.
-
-The dynamic entities also react to the robot. The cat scrambles away when \
-the robot gets within about 0.6 m. The person pauses when the robot is \
-standing in their walking path within about 1 m. These reactions are part \
-of the simulation, not commands you sent. If the operator's driving makes \
-the cat flee or the person stop, you can mention it.
-
+{reactive_paragraph}
 Each object has a `category` ('furniture', 'animal', 'person', 'fixture', \
-'decor'). Use these to talk about the scene naturally rather than reciting \
-names. For dynamic entities, `report_status` also includes a velocity and \
-a `motion` field ('approaching', 'receding', 'parallel', 'stationary') \
-relative to the robot — these are useful when the operator asks 'is that \
-the cat coming toward me?'.
+'decor', 'prop', 'terrain', 'cone', 'barrier', 'infrastructure', \
+'stairs', 'vehicle'). Use these to talk about the scene naturally rather \
+than reciting names. For dynamic entities, `report_status` also includes \
+a velocity and a `motion` field ('approaching', 'receding', 'parallel', \
+'stationary') relative to the robot — these are useful when the operator \
+asks 'is that thing coming toward me?'.
 
 `recent_perceptions` lists transitions you've just noticed — entities \
 entering/leaving range, or stepping in front of you. If the operator asks \
@@ -145,9 +186,9 @@ The robot has two distinct senses:
 (front/left/back/right). This is `nearby_objects` and the `proximity_m` \
 field. It doesn't care which way you're facing — it sees all around.
 - A forward-facing camera with a ~70° FOV that respects occlusion. This \
-is `in_view`. It only sees what's in front of you, and walls/furniture \
-block sight. Things behind you, or hidden behind the couch, won't show \
-up here even if they're nearby.
+is `in_view`. It only sees what's in front of you, and walls/obstacles \
+block sight. Things behind you, or hidden behind a solid object, won't \
+show up here even if they're nearby.
 
 When the operator asks "what do you see?" use `in_view`. When they ask \
 "what's around?" use `nearby_objects`. They can give different answers — \
@@ -282,6 +323,36 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "follow_path",
+        "description": (
+            "Drive through a sequence of (x, y) waypoints. Each is a "
+            "go_to_pose step, but the robot doesn't stop between them — "
+            "it advances smoothly to the next when it arrives within "
+            "~0.2 m of the current waypoint. Same safety/cancellation "
+            "rules as go_to_pose: cancelled by joystick input, halt, "
+            "estop, or by another go_to_pose/follow_path. Useful for "
+            "patrol routes or 'visit several things in order'. Empty "
+            "list is rejected. Use `report_status` to see object positions."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "waypoints": {
+                    "type": "array",
+                    "description": "Ordered list of (x, y) world-frame waypoints.",
+                    "items": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "minItems": 2,
+                        "maxItems": 2,
+                    },
+                    "minItems": 1,
+                },
+            },
+            "required": ["waypoints"],
+        },
+    },
+    {
         "name": "report_status",
         "description": (
             "Get a snapshot of the robot's current state: safety FSM state, "
@@ -311,19 +382,32 @@ class Cognition:
     Holds the LLM client + chat history + the safety/bridge handles
     needed to actually carry out tool calls.
 
-    Conversation history grows unbounded — fine for an MVP. Sliding
-    window or summarization is a future concern.
+    Conversation history is sliding-window bounded — past
+    `HISTORY_TRIM_THRESHOLD` messages, we trim the front down to roughly
+    `HISTORY_TARGET_MESSAGES`. Trimming respects Anthropic's API
+    requirement that tool_use blocks must be paired with their
+    tool_result; we only trim at "fresh turn" boundaries (a user message
+    whose content is a string, not a tool_result list).
 
     A single asyncio lock serializes all calls to the LLM (chat() and
     ambient_react()) so the conversation history can never be interleaved
     by concurrent operations.
     """
 
+    # When history exceeds this, trim to roughly HISTORY_TARGET_MESSAGES.
+    # Both numbers are message counts (user + assistant alternating, plus
+    # tool_result follow-ups). With long tool-call chains, a single chat
+    # turn can produce 4-6 messages — so 50 is roughly 8-12 turns of
+    # context, which is plenty for the LLM to remember recent events
+    # while keeping per-call token usage bounded.
+    HISTORY_TRIM_THRESHOLD = 50
+    HISTORY_TARGET_MESSAGES = 30
+
     def __init__(
         self,
         bridge: BridgeBase,
         safety: SafetyGuard,
-        scene_name: str = "studio",
+        world=None,
     ) -> None:
         api_key = os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
@@ -335,12 +419,38 @@ class Cognition:
             self._client = AsyncAnthropic(api_key=api_key)
         self._bridge = bridge
         self._safety = safety
-        # System prompt is composed once, with the scene-specific intro
-        # baked in. Avoids the LLM hallucinating apartment furniture in
-        # stairs-only mode, etc.
-        self._system_prompt = build_system_prompt(scene_name)
+        # System prompt is built from the actual `World` so the LLM
+        # describes only what's really there. None → real-hardware
+        # prompt that tells it not to invent objects.
+        self._system_prompt = build_system_prompt(world)
         self._history: list[dict[str, Any]] = []
         self._chat_lock = asyncio.Lock()
+
+    def _maybe_trim_history(self) -> None:
+        """Trim old messages once history exceeds the threshold.
+
+        Only trims at safe boundaries — a user message whose content is
+        a string (bare text), which marks the start of a fresh turn.
+        Trimming inside a tool_use/tool_result pair would leave the
+        history in a state Anthropic's API rejects.
+        """
+        if len(self._history) <= self.HISTORY_TRIM_THRESHOLD:
+            return
+        target_start = max(0, len(self._history) - self.HISTORY_TARGET_MESSAGES)
+        for i in range(target_start, len(self._history)):
+            m = self._history[i]
+            if m["role"] == "user" and isinstance(m["content"], str):
+                if i > 0:
+                    dropped = i
+                    self._history = self._history[i:]
+                    logger.info(
+                        "Trimmed %d old messages; %d kept",
+                        dropped, len(self._history),
+                    )
+                return
+        # No safe boundary found in the trim window — leave history
+        # alone. Will retry on the next turn. (Pathological case: a
+        # very long tool-call chain that never terminates.)
 
     async def chat(self, user_text: str) -> str:
         """Send a user message, run any tool calls, return the final text reply."""
@@ -348,6 +458,10 @@ class Cognition:
             return f"(no API key — would have replied to: {user_text!r})"
 
         async with self._chat_lock:
+            # Trim before extending — keeps the API call below operating
+            # on a bounded message list. Trimming respects tool_use /
+            # tool_result pairing (only trims at fresh-turn boundaries).
+            self._maybe_trim_history()
             self._history.append({"role": "user", "content": user_text})
 
             for _ in range(TOOL_LOOP_MAX):
@@ -451,6 +565,8 @@ class Cognition:
                 return await self._do_set_body_height(args)
             if name == "go_to_pose":
                 return await self._do_go_to_pose(args)
+            if name == "follow_path":
+                return await self._do_follow_path(args)
             if name in ACTION_TO_BRIDGE_METHOD:
                 return await self._do_action(name)
         except Exception as e:
@@ -613,6 +729,43 @@ class Cognition:
         if not ok:
             return "no-op: robot must be standing and not in estop"
         return f"ok: navigating toward ({x:.2f}, {y:.2f})"
+
+    async def _do_follow_path(self, args: dict[str, Any]) -> str:
+        """follow_path: safety check → bridge.follow_path → outcome.
+
+        Coerces input shape: accepts list of [x, y] arrays (the JSON-schema
+        form) and converts to list of (x, y) tuples for the bridge.
+        Validates every waypoint has exactly 2 numeric components.
+        """
+        raw = args.get("waypoints")
+        if not isinstance(raw, list) or not raw:
+            await self._announce_intent("follow_path", "error", "empty or missing waypoints")
+            return "error: waypoints must be a non-empty list of [x, y] pairs"
+
+        try:
+            coerced: list[tuple[float, float]] = []
+            for i, wp in enumerate(raw):
+                if not isinstance(wp, (list, tuple)) or len(wp) != 2:
+                    raise ValueError(f"waypoint {i} must be a 2-element list")
+                coerced.append((float(wp[0]), float(wp[1])))
+        except (TypeError, ValueError) as e:
+            await self._announce_intent("follow_path", "error", str(e))
+            return f"error: {e}"
+
+        guard = self._safety.guard_action("follow_path")
+        if not guard.allowed:
+            await self._announce_intent("follow_path", "rejected", guard.reason)
+            return f"rejected: {guard.reason}"
+
+        ok = await self._bridge.follow_path(coerced)
+        outcome = "ok" if ok else "no-op"
+        path_summary = (
+            f"{len(coerced)} waypoints starting at ({coerced[0][0]:.2f},{coerced[0][1]:.2f})"
+        )
+        await self._announce_intent("follow_path", outcome, path_summary)
+        if not ok:
+            return "no-op: robot must be standing and not in estop"
+        return f"ok: following path with {len(coerced)} waypoints"
 
     async def _announce_intent(self, action: str, outcome: str, reason: str) -> None:
         """Publish an intent event so the UI can show what the LLM tried."""

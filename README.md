@@ -8,7 +8,7 @@ actual robot.
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](#license)
-[![Tests: 274](https://img.shields.io/badge/tests-274%20passing-brightgreen.svg)](#tests)
+[![Tests: 285](https://img.shields.io/badge/tests-285%20passing-brightgreen.svg)](#tests)
 [![Status: sim-only](https://img.shields.io/badge/status-sim%20only-yellow.svg)](#hardware-integration-status)
 
 ---
@@ -51,7 +51,9 @@ python -m sweetie
 ```
 
 Then open <http://127.0.0.1:8000>. Click **arm**, then drag the joystick.
-Press **space** for E-STOP at any time.
+Press **space** for E-STOP at any time. Wheel-zoom and click-drag-pan
+the map (useful at high obstacle densities); the **+/−/⊙** buttons
+zoom in, out, and reset.
 
 ### Configuration
 
@@ -102,6 +104,7 @@ The named-scene-registry pattern is borrowed from
 | `look_at`         | Rotate to face a named world object                                     |
 | `set_body_height` | Crouch (0.18 m) or stand tall (0.34 m); default standing is 0.27 m      |
 | `go_to_pose`      | Drive in a straight line toward (x, y), decelerating on approach        |
+| `follow_path`     | Queue a sequence of waypoints; smooth handoff between them              |
 | `report_status`   | Snapshot of safety, mode, pose, proximity, vision, region, recent events |
 
 All action tools route through the `SafetyGuard`. `report_status` is
@@ -225,17 +228,19 @@ issue motion commands. Exit code 0 = all checks passed.
 pytest
 ```
 
-274 tests, all passing as of this README. Coverage includes:
+285 tests, all passing as of this README. Coverage includes:
 
 - Safety FSM transitions, predicate ticks, proximity-aware scaling,
   battery-low and tilt auto-trip
 - Bridge: connect/disconnect, command dispatch, integration, look_at,
-  reactive entities, perception, region tracking, body height, navigation
+  reactive entities, perception, region tracking, body height,
+  navigation, waypoint queues
 - World: lookups, geometry, categories, velocity, motion classification,
   reactive flee/yield, scene registry, regions, procedural obstacle fields
 - Perception: quadrant transitions, FOV cone, occlusion, vision events
 - Cognition: tool dispatch, safety integration, look_at outcomes,
-  report_status structure, scene-aware system prompt
+  report_status structure, scene-aware system prompt, sliding-window
+  history trimming
 - Real bridge: 25 mock-based tests against the documented SDK surface
 - Preflight diagnostic: SDK init, DDS connect, topic publishing, schema
   validation, mode-code observation

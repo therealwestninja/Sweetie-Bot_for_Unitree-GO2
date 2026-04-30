@@ -39,7 +39,7 @@ more useful than version numbers anyway.
 | `go_to_pose(x, y)` (straight-line nav)    | ✅       | Smooth deceleration, cancellable; no path-planning         |
 | Real-hardware nav (Nav2 + costmap)        | ⏳       | `RealBridge.go_to_pose` deliberately refuses for safety    |
 | Gait switching (walk/trot/bound)          | ⏳       | API IDs known; no use case yet                             |
-| Trajectory following / waypoint sequences | ⏳       | Future composition over `go_to_pose`                       |
+| Trajectory following / waypoint sequences | ✅       | `follow_path([(x,y), ...])` queues over `go_to_pose`; smooth handoff |
 
 ### Perception & vision
 
@@ -80,7 +80,7 @@ more useful than version numbers anyway.
 | `report_status` snapshot (proximity, vision, region, perception, assists) | ✅ | Single read-only window |
 | Ambient cognition (LLM speaks unprompted) | ✅       | Opt-in via `SWEETIE_AMBIENT=on`; cooldown-protected        |
 | Scene-aware system prompt                 | ✅       | Built from live `World` — no hallucinated objects, dynamic-entity guidance only when relevant |
-| Sliding-window history (token budget)     | ⏳       | History grows unbounded today; fine for short sessions     |
+| Sliding-window history (token budget)     | ✅       | Trim threshold 50 → target 30 messages; respects tool_use/tool_result pairing |
 | Multi-LLM (e.g. local model fallback)     | 🚫       | Out of scope: keeps the architecture simple                |
 
 ### Real hardware
@@ -105,7 +105,7 @@ more useful than version numbers anyway.
 | Chat panel with tool-call visibility      | ✅       | "do" / "spk" / "assist" / "ambient" line variants           |
 | Joystick + heartbeat                      | ✅       | Slows/centers on inactivity                                 |
 | Spacebar E-STOP                           | ✅       | Always works                                                |
-| Map zoom / pan controls                   | ⏳       | Currently fixed at viewBox `-10 -10 20 20`                 |
+| Map zoom / pan controls                   | ✅       | Wheel zoom (cursor-anchored), drag pan, +/-/0 keys, button overlay |
 | Persistent operator settings              | ⏳       | No state survives restart                                   |
 | Mobile-friendly UI                        | 🚫       | Tele-op needs a real screen and keyboard                   |
 
