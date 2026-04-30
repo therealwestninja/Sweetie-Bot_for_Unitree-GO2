@@ -1,85 +1,277 @@
-# Third-party reference materials
+# sweetie
 
-This directory contains files from other open-source Go2 projects, included
-here verbatim for **reference**. They are not currently imported by the
-`sweetie` package — they exist so that someone bringing up real hardware
-can cross-check our `RealBridge` against authoritative sources without
-having to re-clone the upstream repos.
+A small tele-op platform for a Unitree Go2 quadruped, with a deterministic
+safety FSM, an LLM for chat and high-level intent, and a kinematic
+simulator that lets you exercise everything without hardware. **Sim-only
+today** — the real-hardware bridge exists but is unverified against an
+actual robot.
 
-Each subdirectory preserves the original project's LICENSE file at its
-root. Individual files retain their original copyright and SPDX headers
-where present. **Nothing here has been modified.**
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](#license)
+[![Tests: 260](https://img.shields.io/badge/tests-260%20passing-brightgreen.svg)](#tests)
+[![Status: sim-only](https://img.shields.io/badge/status-sim%20only-yellow.svg)](#hardware-integration-status)
 
-## Provenance
+---
 
-### `go2_ros2_sdk/`
+## What it is
 
-- **Source:** [github.com/abizovnuralem/go2_ros2_sdk](https://github.com/abizovnuralem/go2_ros2_sdk)
-- **Snapshot:** master branch, 2025-01-13
-- **License:** BSD 2-Clause
-- **Copyright:** RoboVerse community, 2024
+Sweetie is a **single-process** application that wires four pieces together:
 
-Note on a discrepancy: the project-level `LICENSE` is BSD 2-Clause, but
-the SPDX-License-Identifier header on individual `.py` files reads
-`BSD-3-Clause`. This appears to be an inconsistency in the upstream
-source. We've preserved both notices unchanged. When in doubt, treat
-these files as governed by the more restrictive of the two (BSD-3-Clause,
-which adds a non-endorsement clause).
+- A **simulator** of a small studio-backlot world (apartment, street,
+  stairs, agility area; 38 named objects across 12 categories) that
+  publishes the same state-shape as a real Go2 — pose, velocity,
+  4-quadrant proximity, body height.
+- A **safety FSM** (`IDLE → ARMED → ACTIVE → ESTOP`) with proximity-aware
+  velocity scaling. Every motion command — joystick or LLM — is gated
+  through it. The same code runs against sim and hardware.
+- A **web operator console** with a top-down map, a virtual joystick, a
+  latching E-STOP, telemetry, and a chat panel.
+- An **LLM cognition layer** (Claude) with eight tools for control and
+  reporting, optional ambient commentary on bus events, and honest
+  separation between proximity (360°) and vision (forward-camera FOV +
+  occlusion).
 
-Files copied: `LICENSE`, `robot_commands.py`, `webrtc_topics.py`,
-`command_generator.py`, `robot_data.py`.
+The runtime is FastAPI + a single WebSocket per browser tab. No ROS,
+no microservices, no external state stores — at any moment, the entire
+robot's "mind" fits in one process.
 
-### `go2_omniverse/`
+## Quick start
 
-- **Source:** [github.com/abizovnuralem/go2_omniverse](https://github.com/abizovnuralem/go2_omniverse)
-- **Snapshot:** master branch, 2025-02-24
-- **License:** BSD 2-Clause
-- **Copyright:** RoboVerse community, 2024
+```bash
+git clone https://github.com/<YOU>/sweetie.git
+cd sweetie
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
 
-Files copied: `LICENSE`, `terrain_cfg.py`, `terrain_generator_cfg.py`.
+# Optional but strongly recommended:
+cp .env.example .env
+# edit .env and add ANTHROPIC_API_KEY
 
-### `isaac_go2_ros2/`
+python -m sweetie
+```
 
-- **Source:** [github.com/Zhefan-Xu/isaac-go2-ros2](https://github.com/Zhefan-Xu/isaac-go2-ros2)
-  (`isaacsim-4.5` branch, per the upstream README)
-- **Snapshot:** 2025-09-23
-- **License:** BSD 2-Clause (LICENSE dated 2025-02-24, predates this
-  archive's licensing update)
-- **Copyright:** RoboVerse community, 2024
-- **Public-facing maintainer:** Zhefan Xu
+Then open <http://127.0.0.1:8000>. Click **arm**, then drag the joystick.
+Press **space** for E-STOP at any time.
 
-The `LICENSE` file dates from before this archive update. The README
-acknowledges the RL controller is based on `go2_omniverse` (also
-RoboVerse community), making the shared copyright plausible.
+### Configuration
 
-Files copied: `LICENSE`, `README.md`, `sim.yaml`, `sim_env.py`,
-`terrain_cfg.py`, `go2_ros2_bridge.py`.
+All knobs are environment variables. Everything has sensible defaults.
 
-### `unitree_go2_nav/`
+| Variable                    | Default       | What it does                                                                 |
+| --------------------------- | ------------- | ---------------------------------------------------------------------------- |
+| `ANTHROPIC_API_KEY`         | _(unset)_     | Required for the cognition layer; without it `/api/chat` returns canned replies |
+| `SWEETIE_HOST` / `SWEETIE_PORT` | `127.0.0.1` / `8000` | Where the FastAPI server binds |
+| `SWEETIE_MODEL`             | `claude-sonnet-4-5` | Anthropic model name |
+| `SWEETIE_BRIDGE`            | `sim`         | `sim` (kinematic simulator) or `real` (Unitree Go2 over DDS) |
+| `SWEETIE_SCENE`             | `studio`      | `studio` / `apartment` / `street` / `stairs` / `agility` (sim only) |
+| `SWEETIE_NETWORK_INTERFACE` | `eth0`        | DDS network interface (real bridge only) |
+| `SWEETIE_DDS_DOMAIN`        | `0`           | DDS domain ID (real bridge only) |
+| `SWEETIE_AMBIENT`           | `off`         | `on` enables LLM commenting unprompted on bus events |
+| `SWEETIE_AMBIENT_COOLDOWN_S`| `20`          | Minimum seconds between ambient utterances |
 
-- **Source:** [github.com/Sayantani-Bhattacharya/unitree_go2_nav](https://github.com/Sayantani-Bhattacharya/unitree_go2_nav)
-  (per the upstream README)
-- **Snapshot:** main branch, 2025-03-18 (source files); LICENSE added 2025-04-30
-- **License:** BSD 2-Clause (per the LICENSE.txt file)
-- **Copyright on the LICENSE file:** RoboVerse community, 2024
-- **Author stated in README:** Sayantani Bhattacharya
+### Scenes
 
-**Provenance note:** the `LICENSE.txt` file in this project's archive
-was added on 2025-04-30 (concurrent with the second archive of these
-projects shared with this codebase) and matches the RoboVerse community
-boilerplate used by the other three projects. The upstream README, by
-contrast, names Sayantani Bhattacharya as the sole author and links to
-her personal GitHub repository, with no acknowledgment of RoboVerse
-community heritage. We've preserved the `LICENSE` as supplied;
-downstream users should make their own determination about whether the
-licensing authority is what it appears to be.
+Pick one with `SWEETIE_SCENE=…`. The default `studio` is the full
+backlot; the others are focused practice areas:
 
-Files copied: `LICENSE`, `README.md`, `nav2_params.yaml`,
-`navigation.launch.py`, `mapping.launch.py`.
+| Scene       | Objects | Best for                                                |
+| ----------- | -------:| ------------------------------------------------------- |
+| `studio`    | 38      | The full world, four named regions, both dynamic entities |
+| `apartment` |  7      | Reactive entities (cat scrambles, person yields), basic safety |
+| `street`    | 16      | Static obstacle navigation: car, hydrant, lamp, cones, fence, curbs |
+| `stairs`    |  7      | Spatial reasoning around 2/3/5/8-step runs and the L-bend |
+| `agility`   |  8      | Apple boxes plus passable terrain (slope/hill/moguls/gravel) |
 
-## How this relates to `sweetie`
+The named-scene-registry pattern is borrowed from
+[`isaac_go2_ros2/sim_env.py`](third_party/isaac_go2_ros2/sim_env.py)
+(BSD-2-Clause, RoboVerse community).
 
-See `docs/go2-references.md` in the repository root for cross-references:
-which constants we actually use, where the upstream values disagree
-with what we wrote in `sweetie/core/real_bridge.py`, and which transport
-(native CycloneDDS vs WebRTC) each set of topic names applies to.
+## Capabilities
+
+### LLM tools
+
+| Tool              | Effect                                                                  |
+| ----------------- | ----------------------------------------------------------------------- |
+| `speak`           | Emit a short line through the robot's speaker (in sim, just chat)       |
+| `stand_up`        | Bring the robot from folded to standing                                 |
+| `sit_down`        | Fold the robot back down                                                |
+| `halt`            | Stop motion immediately, stay armed                                     |
+| `look_at`         | Rotate to face a named world object                                     |
+| `set_body_height` | Crouch (0.18 m) or stand tall (0.34 m); default standing is 0.27 m      |
+| `go_to_pose`      | Drive in a straight line toward (x, y), decelerating on approach        |
+| `report_status`   | Snapshot of safety, mode, pose, proximity, vision, region, recent events |
+
+All action tools route through the `SafetyGuard`. `report_status` is
+read-only and always allowed.
+
+### Two senses, distinguished
+
+The LLM can see the world two different ways and the prompt is explicit
+that they can disagree:
+
+- **Proximity (360°, no occlusion)** — `nearby_objects` and
+  `proximity_m`. The 4-quadrant ultrasonic-style sensor model. Sees in
+  every direction at once.
+- **Vision (forward 70° cone, occluded by solid obstacles)** —
+  `in_view`. The forward-camera model. A box behind the couch won't
+  appear here even if it's nearby.
+
+When the operator asks "what do you see?", the LLM uses `in_view`. When
+they ask "what's around?", it uses `nearby_objects`.
+
+### Reactive entities
+
+The cat scrambles away when the robot gets within ~0.6 m. The person
+pauses when the robot is in their walking path within ~1 m. Both
+behaviors emerge from passing the robot's pose to entities each tick;
+neither cat nor person has agency beyond that.
+
+### Ambient cognition
+
+Off by default. With `SWEETIE_AMBIENT=on`, the LLM subscribes to bus
+events (smart-assist interventions, perception transitions, region
+changes) and may comment unprompted. Strict cooldown (default 20 s)
+prevents spam. Cooldown only consumes when the LLM actually speaks —
+`(silent)` decisions don't burn the budget.
+
+## Architecture
+
+```
+                ┌─────────────────────────────────┐
+                │  Web operator console (browser) │
+                │  joystick · map · chat · E-STOP │
+                └──────────────┬──────────────────┘
+                               │  WebSocket + REST
+                ┌──────────────▼──────────────────┐
+   ┌──────┐    │       FastAPI server (one process)
+   │ LLM  │◄──►│  ┌──────────────────────────────┐ │
+   │(Claude)│  │  │     Cognition (chat + tools) │ │
+   └──────┘   │  └────────┬─────────────┬───────┘ │
+              │           │             │         │
+              │  ┌────────▼─┐    ┌──────▼─────┐  │
+              │  │ Safety   │    │  Bus       │  │
+              │  │  guard   │    │  pub/sub   │  │
+              │  └────────┬─┘    └──────┬─────┘  │
+              │           │             │         │
+              │   ┌───────▼─────────────▼──────┐ │
+              │   │     BridgeBase (interface) │ │
+              │   ├────────────────────────────┤ │
+              │   │ SimBridge        RealBridge│ │
+              │   │ (kinematic)      (Go2 DDS) │ │
+              │   └────┬───────────────────────┘ │
+              │        │                         │
+              │   ┌────▼──────┐    ┌──────────┐  │
+              │   │   World   │    │ Perception│ │
+              │   │  + scenes │    │  (FOV +   │ │
+              │   │  + regions│    │ occlusion)│ │
+              │   └───────────┘    └──────────┘  │
+              └──────────────────────────────────┘
+```
+
+The single most important architectural decision: **every command goes
+through `SafetyGuard`, regardless of source.** Joystick, LLM tool calls,
+ambient utterances proposing actions — all routed through the same
+chokepoint.
+
+## Hardware integration status
+
+The `RealBridge` has been written against the documented `unitree_sdk2py`
+Python API and the published schemas in the upstream `unitree_ros2`
+repository. **It has not been runtime-tested against an actual Go2.**
+
+What's verified by tests:
+
+- Integration shape: each SDK call structured against the documented
+  surface, validated by 25 mock-based tests
+- Wire protocol: DDS topic names (`rt/sportmodestate`, `rt/lowstate`)
+  match upstream schemas
+- Architectural seams: `RealBridge` implements `BridgeBase` cleanly;
+  safety guard, cognition, and operator UI work identically against
+  either bridge
+- Failure modes: commands before `connect()` return False, SDK errors
+  return False, missing SDK gives a clear actionable error
+
+What is NOT verified:
+
+- Whether the upstream `unitree_sdk2py` API surface still matches what
+  we wrote against
+- The mode-code mapping (`uint8 mode` → our internal vocabulary)
+- Network configuration (interface, domain ID)
+- Timing/latency assumptions
+- Real-hardware navigation: `go_to_pose` is **deliberately refused** on
+  `RealBridge` — there's no perception or planner on hardware yet, so
+  driving blindly toward a coordinate would be unsafe
+
+First hardware bring-up should be treated as bring-up. Expect to debug.
+The cross-reference doc at [`docs/go2-references.md`](docs/go2-references.md)
+maps our integration against four other open-source Go2 projects
+(BSD-2-Clause); start there.
+
+## Tests
+
+```bash
+pytest
+```
+
+260 tests, all passing as of this README. Coverage includes:
+
+- Safety FSM transitions, predicate ticks, proximity-aware scaling
+- Bridge: connect/disconnect, command dispatch, integration, look_at,
+  reactive entities, perception, region tracking, body height, navigation
+- World: lookups, geometry, categories, velocity, motion classification,
+  reactive flee/yield, scene registry, regions
+- Perception: quadrant transitions, FOV cone, occlusion, vision events
+- Cognition: tool dispatch, safety integration, look_at outcomes,
+  report_status structure
+- Real bridge: 25 mock-based tests against the documented SDK surface
+- Ambient: cooldown, lock, silent-response handling, bus subscription
+- Scene registry: per-scene object filtering, region attachment
+
+## Layout
+
+```
+sweetie/
+├── core/
+│   ├── bridge.py        # SimBridge + BridgeBase. The simulator.
+│   ├── real_bridge.py   # RealBridge — wraps unitree_sdk2py. UNVERIFIED.
+│   ├── safety.py        # FSM + command guard. Single source of truth.
+│   └── bus.py           # Tiny async pub/sub.
+├── cognition/
+│   ├── llm.py           # Anthropic client, tools, chat loop, ambient_react.
+│   └── ambient.py       # Bus-event-driven unprompted commentary (opt-in).
+├── sim/
+│   ├── world.py         # 38 named objects, 4 named regions, scene registry.
+│   └── perception.py    # SimPerception: quadrants + vision FOV + occlusion.
+└── teleop/
+    ├── server.py        # FastAPI: /ws + /api/chat + /api/world + static UI.
+    └── static/          # The operator console (HTML + CSS + vanilla JS).
+
+docs/
+└── go2-references.md    # Cross-reference vs upstream Go2 projects.
+
+third_party/
+├── go2_ros2_sdk/        # BSD-2 reference: WebRTC SDK, sport mode IDs.
+├── go2_omniverse/       # BSD-2 reference: Isaac Sim terrain configs.
+├── isaac_go2_ros2/      # BSD-2 reference: ROS2 sim integration.
+└── unitree_go2_nav/     # BSD-2 reference: Nav2 integration.
+```
+
+## Reference materials
+
+[`docs/go2-references.md`](docs/go2-references.md) cross-references
+sweetie's `RealBridge` against four BSD-2-Clause community projects
+(sport mode API IDs, DDS topic names, mode-code mapping, ROS2
+conventions). The upstream files are preserved verbatim under
+`third_party/`, with their original copyright headers and LICENSE files
+intact. Start there if you're bringing this up on real hardware.
+
+## Roadmap
+
+See [`ROADMAP.md`](ROADMAP.md) for what's planned and what's deliberately
+out of scope.
+
+## License
+
+MIT. See `LICENSE`. Third-party reference materials under `third_party/`
+retain their original BSD-2-Clause licenses; see
+[`third_party/README.md`](third_party/README.md) for per-project terms.

@@ -45,7 +45,9 @@ def _make_bridge() -> tuple[BridgeBase, World | None]:
     """
     Pick the bridge implementation based on `SWEETIE_BRIDGE`.
 
-    `sim` (default): kinematic simulator with the M5 default scene.
+    `sim` (default): kinematic simulator. The scene is picked by
+            `SWEETIE_SCENE` (default 'studio' = full backlot; other valid
+            values: 'apartment', 'street', 'stairs', 'agility').
     `real`: connects to a real Go2 over DDS via unitree_sdk2py. Network
             interface is read from `SWEETIE_NETWORK_INTERFACE` (default
             'eth0'); DDS domain from `SWEETIE_DDS_DOMAIN` (default 0).
@@ -69,15 +71,40 @@ def _make_bridge() -> tuple[BridgeBase, World | None]:
 
     if kind != "sim":
         logger.warning("Unknown SWEETIE_BRIDGE=%r, defaulting to 'sim'", kind)
-    logger.info("Using SimBridge with default scene")
-    w = default_scene()
+
+    scene_name = os.getenv("SWEETIE_SCENE", "studio")
+    from sweetie.sim.world import get_scene
+    w = get_scene(scene_name)
+    logger.info(
+        "Using SimBridge with scene=%r (%d objects)",
+        scene_name, len(w.objects),
+    )
     return SimBridge(world=w), w
 
 
 # ── Process-wide singletons ──────────────────────────────────────────────────
 bridge, world = _make_bridge()
 safety = SafetyGuard()
-cog = Cognition(bridge=bridge, safety=safety)
+
+# Pass the scene name to Cognition so the system prompt accurately reflects
+# what world the LLM is in. Real-hardware mode uses the "real" prompt, which
+# tells the LLM there's no simulated world and not to fabricate one.
+_cognition_scene = (
+    "real" if os.getenv("SWEETIE_BRIDGE", "sim").lower() == "real"
+    else os.getenv("SWEETIE_SCENE", "studio")
+)
+cog = Cognition(bridge=bridge, safety=safety, scene_name=_cognition_scene)
+
+# Ambient cognition — opt-in via SWEETIE_AMBIENT=on. When enabled, the LLM
+# subscribes to bus events and may choose to comment unprompted.
+_ambient = None
+if os.getenv("SWEETIE_AMBIENT", "off").lower() == "on":
+    from sweetie.cognition.ambient import AmbientCognition
+    _ambient = AmbientCognition(
+        cog,
+        cooldown_s=float(os.getenv("SWEETIE_AMBIENT_COOLDOWN_S", "20")),
+    )
+    logger.info("Ambient cognition will be enabled at startup")
 
 # Active WebSocket connections (one per tab). Speak events fan out to all.
 _clients: set[WebSocket] = set()
@@ -111,9 +138,18 @@ async def lifespan(app: FastAPI):
     async def on_assist(payload: dict[str, Any]) -> None:
         await _broadcast({"type": "assist", "events": payload.get("events", [])})
 
+    async def on_ambient(payload: dict[str, Any]) -> None:
+        await _broadcast({"type": "ambient", "text": payload.get("text", "")})
+
     bus.subscribe("speak", on_speak)
     bus.subscribe("intent", on_intent)
     bus.subscribe("assist", on_assist)
+    bus.subscribe("ambient", on_ambient)
+
+    # Attach ambient cognition AFTER the broadcast subscribers exist, so
+    # any ambient utterance fired during startup correctly fans out to UIs.
+    if _ambient is not None:
+        _ambient.attach()
 
     try:
         yield
