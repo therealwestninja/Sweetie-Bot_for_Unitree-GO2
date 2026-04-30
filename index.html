@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SWEETIE — operator console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">◢◤</span>
+      <span class="brand-name">SWEETIE</span>
+      <span class="brand-sub">operator console / sim</span>
+    </div>
+    <div class="status-strip" id="status-strip">
+      <div class="stat" data-key="conn">
+        <span class="stat-label">link</span>
+        <span class="stat-value" id="stat-conn">…</span>
+      </div>
+      <div class="stat" data-key="safety">
+        <span class="stat-label">safety</span>
+        <span class="stat-value" id="stat-safety">—</span>
+      </div>
+      <div class="stat" data-key="mode">
+        <span class="stat-label">mode</span>
+        <span class="stat-value" id="stat-mode">—</span>
+      </div>
+      <div class="stat" data-key="batt">
+        <span class="stat-label">batt</span>
+        <span class="stat-value" id="stat-batt">—</span>
+      </div>
+      <div class="stat" data-key="pose">
+        <span class="stat-label">pose</span>
+        <span class="stat-value" id="stat-pose">—</span>
+      </div>
+      <div class="stat" data-key="vel">
+        <span class="stat-label">vel</span>
+        <span class="stat-value" id="stat-vel">—</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="grid">
+    <!-- LEFT: joystick + controls -->
+    <section class="panel pad-panel">
+      <h2 class="panel-title">manual control</h2>
+      <div class="joystick" id="joystick">
+        <div class="joystick-ring"></div>
+        <div class="joystick-axis-h"></div>
+        <div class="joystick-axis-v"></div>
+        <div class="joystick-knob" id="joystick-knob"></div>
+        <div class="joystick-readout" id="joystick-readout">
+          <span>vx 0.00</span><span>vyaw 0.00</span>
+        </div>
+      </div>
+
+      <div class="hint">
+        drag &nbsp;·&nbsp; ↑↓ forward/back &nbsp;·&nbsp; ←→ turn &nbsp;·&nbsp; release to stop
+      </div>
+
+      <div class="button-row">
+        <button class="btn" data-action="stand_up">stand</button>
+        <button class="btn" data-action="stand_down">sit</button>
+      </div>
+      <div class="button-row">
+        <button class="btn btn-arm" data-action="arm" id="btn-arm">arm</button>
+        <button class="btn" data-action="disarm">disarm</button>
+      </div>
+      <div class="button-row estop-row">
+        <button class="btn btn-estop" data-action="estop">⬛ E-STOP</button>
+        <button class="btn btn-clear" data-action="clear_estop">clear</button>
+      </div>
+
+      <div class="map-section">
+        <h3 class="map-title">world map <span class="dim">/ top-down</span></h3>
+        <svg
+          id="map"
+          class="map"
+          viewBox="-3.5 -3.5 7 7"
+          xmlns="http://www.w3.org/2000/svg"
+          preserveAspectRatio="xMidYMid meet"
+        >
+          <!-- grid -->
+          <g class="map-grid">
+            <line x1="-3.5" y1="0"    x2="3.5"  y2="0"    />
+            <line x1="0"    y1="-3.5" x2="0"    y2="3.5"  />
+            <circle cx="0" cy="0" r="1" />
+            <circle cx="0" cy="0" r="2" />
+            <circle cx="0" cy="0" r="3" />
+          </g>
+          <g id="map-objects"></g>
+          <g id="map-robot">
+            <!-- robot is rendered/updated from JS -->
+          </g>
+        </svg>
+      </div>
+    </section>
+
+    <!-- RIGHT: chat -->
+    <section class="panel chat-panel">
+      <h2 class="panel-title">comms <span class="dim">/ talk to sweetie</span></h2>
+      <div class="chat-log" id="chat-log">
+        <div class="chat-line chat-sys">
+          <span class="chat-tag">sys</span>
+          <span class="chat-body">no API key? replies will be canned. set ANTHROPIC_API_KEY to enable cognition.</span>
+        </div>
+      </div>
+      <form class="chat-input" id="chat-form">
+        <input
+          type="text"
+          id="chat-text"
+          autocomplete="off"
+          placeholder="say something to sweetie…"
+        />
+        <button type="submit" class="btn btn-send">send</button>
+      </form>
+    </section>
+  </main>
+
+  <footer class="footbar">
+    <span class="dim">M1+M2+M3+M4+M5 · sim only · reactive cognition · live world</span>
+    <span class="dim" id="last-event">—</span>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
