@@ -74,6 +74,8 @@ community heritage. We've preserved the `LICENSE` as supplied;
 downstream users should make their own determination about whether the
 licensing authority is what it appears to be.
 
+**__This is why you NEED to use Licenses, people.__**
+
 Files copied: `LICENSE`, `README.md`, `nav2_params.yaml`,
 `navigation.launch.py`, `mapping.launch.py`.
 
