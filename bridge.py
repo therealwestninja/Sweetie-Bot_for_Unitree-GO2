@@ -20,7 +20,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 
-from sweetie.sim.world import PROXIMITY_MAX_RANGE, World
+from sweetie.sim.world import PROXIMITY_MAX_RANGE, Observer, World
 
 logger = logging.getLogger(__name__)
 
@@ -258,8 +258,10 @@ class SimBridge(BridgeBase):
         # Advance moving world entities, then compute proximity from their
         # new positions. Order matters: we want the proximity reading the
         # operator gets to reflect the *current* world, not last frame's.
+        # The Observer hands the robot's pose to reactive entities so they
+        # can flee, yield, etc.
         if self._world is not None:
-            self._world.tick(dt)
+            self._world.tick(dt, observer=Observer(s.x, s.y, s.yaw))
             s.range_obstacle = self._world.proximity_ranges(s.x, s.y, s.yaw)
             self._update_perceptions()
 

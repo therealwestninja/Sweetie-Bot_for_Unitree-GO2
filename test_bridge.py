@@ -269,3 +269,24 @@ async def test_perception_logs_quadrant_change_to_front():
     events = [e["event"] for e in log]
     assert any("walker" in e and "in front" in e for e in events)
     await b.disconnect()
+
+
+# ── M? reactive: bridge passes observer to world ────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_bridge_observer_triggers_cat_flee():
+    """Place a fleeing cat next to robot's start, confirm it scrambles away."""
+    from sweetie.sim.world import Wanderer
+    cat = Wanderer(
+        name="cat", x=0.4, y=0.0, speed=1.0, roam_radius=2.0, seed=1,
+        flee_distance=1.0, flee_speed_multiplier=3.0,
+    )
+    w = World([cat])
+    b = SimBridge(world=w)
+    await b.connect()
+    # Robot is at (0, 0); cat starts at (0.4, 0). After ticks, cat should
+    # move away (positive x direction, since flee = away from observer).
+    await asyncio.sleep(0.4)
+    assert cat.x > 0.4  # moved further from the robot
+    await b.disconnect()

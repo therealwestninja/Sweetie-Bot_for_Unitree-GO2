@@ -56,6 +56,12 @@ around the apartment. Their positions change over time, so don't rely on \
 old report_status results when the operator asks where something is — \
 call `report_status` again for fresh data.
 
+The dynamic entities also react to the robot. The cat scrambles away when \
+the robot gets within about 0.6 m. The person pauses when the robot is \
+standing in their walking path within about 1 m. These reactions are part \
+of the simulation, not commands you sent. If the operator's driving makes \
+the cat flee or the person stop, you can mention it.
+
 Each object has a `category` ('furniture', 'animal', 'person', 'fixture', \
 'decor'). Use these to talk about the scene naturally rather than reciting \
 names. For dynamic entities, `report_status` also includes a velocity and \

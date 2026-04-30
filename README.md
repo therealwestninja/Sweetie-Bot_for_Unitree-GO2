@@ -5,13 +5,13 @@ Hybrid control: deterministic safety FSM, LLM for high-level chat/intent.
 
 ## What this actually does, today
 
-Milestones shipped: **M1, M2, M3, M4, M5, M?-scene, M7**.
+Milestones shipped: **M1, M2, M3, M4, M5, M?-scene, M7, M?-reactive**.
 
 - Behavioural simulator (`SimBridge`) that integrates commanded velocity into pose at 50 Hz, populates proximity readings (front/left/back/right) from a small fake world, ticks moving entities, supports closed-loop yaw goals for "look at this thing", and tracks per-entity quadrant transitions for perception events.
 - Safety FSM (`SafetyGuard`) that gates every motion command and every action intent. States: `IDLE → ARMED → ACTIVE → ESTOP`. The guard also applies proximity-aware velocity scaling — operator joystick commands toward an obstacle are linearly slowed between 1.0 m and 0.3 m clearance, and zeroed below the hard floor. Driving away is always full-speed.
 - Web operator console: drag joystick to drive, ARM/DISARM/STAND/SIT buttons, latching E-STOP, telemetry strip, and a top-down world map showing the room and the robot's pose live. Smart-assist interventions show up as ⚠ amber chat lines.
 - Reactive LLM cognition: chat with Claude in the side panel. Six tools — `speak`, `stand_up`, `sit_down`, `halt`, `look_at`, `report_status` — all flowing through the same `SafetyGuard` the joystick does. `report_status` exposes proximity, recent assists, *and* — for each nearby object — its category and current motion (approaching/receding/stationary), plus a `recent_perceptions` log of meaningful transitions.
-- A small fake world (`sim/world.py`) with five static objects and two moving ones — a `Wanderer` cat and a `PathWalker` person. Each object carries a category. The robot's `range_obstacle[4]` matches the schema the real Go2 publishes.
+- A small fake world (`sim/world.py`) with five static objects and two moving ones — a `Wanderer` cat and a `PathWalker` person. Each object carries a category. Both dynamic entities are *reactive*: the cat scrambles away when the robot gets within 0.6 m, and the person pauses when the robot is in their walking path within 1 m. The robot's `range_obstacle[4]` matches the schema the real Go2 publishes.
 - A `RealBridge` (`core/real_bridge.py`) for connecting to an actual Unitree Go2 over DDS via `unitree_sdk2py`. **This integration is unverified on hardware — see the warning below.** Selectable at startup via `SWEETIE_BRIDGE=real`.
 
 ## Hardware integration status
@@ -96,9 +96,9 @@ These are aspirational — listed by what they unlock, not by version number.
 
 **M6 — physics sim.** Optional. Either revive the MuJoCo bridge from the original wreckage or stay kinematic. Decide based on whether you actually need to test stability/tipping/recovery — kinematic sim is fine for everything else.
 
-**M? — ambient cognition.** LLM gets periodic world-state snapshots and can act on its own (not just suggest in response to prompts). Adds real complexity (when does it run? what's the rate-limit story? cost?). The world is now dynamic and observable enough that proactivity has things to react to. The most interesting variant: drive the LLM by perception events rather than on a clock.
+**M? — ambient cognition.** LLM gets periodic world-state snapshots and can act on its own (not just suggest in response to prompts). The world is now dynamic, observable, *and* reactive enough that proactivity has things to react to. The most interesting variant: drive the LLM by perception events rather than on a clock. Adds real complexity (when does it run? what's the rate-limit story? cost?), so should only land when there's a clear use case.
 
-**M? — reactive entities.** Right now entities move along their own patterns regardless of the robot. Making the cat dart away when the robot gets close, or the person look up when called, would give the world a sense of being inhabited. Crosses into "entities have goals" territory.
+**M? — entity goals beyond reactive.** The cat just flees; the person just yields. They have no purposes — the cat doesn't go to a food bowl, the person doesn't have errands. Adding entity-level "want" (the cat wants to nap on the rug; the person wants to reach the kitchen and back) would make the simulation feel less scripted. Easy to add but unclear value.
 
 ## License
 

@@ -40,6 +40,20 @@ QUADRANT_NAMES = ("front", "left", "back", "right")
 PROXIMITY_MAX_RANGE = 3.0
 
 
+@dataclass(frozen=True)
+class Observer:
+    """
+    An external observer (typically the robot) that reactive entities
+    react to. Passed through World.tick() to each dynamic entity's
+    update() method on every frame. Optional everywhere — entities that
+    ignore it behave the same as they did pre-reactive.
+    """
+
+    x: float
+    y: float
+    yaw: float = 0.0
+
+
 @dataclass
 class WorldObject:
     """A named thing in the world. Position is the center of its bounding circle."""
@@ -66,8 +80,13 @@ class WorldObject:
     _prev_y: float = field(init=False, default=0.0)
     _tick_dt: float = field(init=False, default=0.0)
 
-    def update(self, dt: float) -> None:
-        """Advance this object by `dt` seconds. No-op for static objects."""
+    def update(self, dt: float, observer: Observer | None = None) -> None:
+        """Advance this object by `dt` seconds. No-op for static objects.
+
+        `observer` is an optional reference to an external observer (the
+        robot). Reactive subclasses may use it to flee, yield, or
+        otherwise respond to its position. The base WorldObject ignores it.
+        """
 
     def to_dict(self) -> dict:
         return {
@@ -91,6 +110,12 @@ class Wanderer(WorldObject):
 
     Pass `seed` for deterministic behaviour in tests; leave it None for
     "different every run".
+
+    Reactive behaviour: if `flee_distance > 0` and an `observer` arrives
+    within that distance, the wanderer overrides its current target with
+    one heading directly away from the observer, and moves at
+    `speed * flee_speed_multiplier` until it's clear. This is the cat
+    scrambling away when the robot gets too close.
     """
 
     dynamic: ClassVar[bool] = True
@@ -101,6 +126,9 @@ class Wanderer(WorldObject):
     home_y: float | None = None
     seed: int | None = None
     arrival_tolerance: float = 0.05
+    # Reactive params. flee_distance=0 disables fleeing entirely (back-compat).
+    flee_distance: float = 0.0
+    flee_speed_multiplier: float = 2.0
 
     # Internal state
     _target_x: float = field(init=False, default=0.0)
@@ -116,18 +144,48 @@ class Wanderer(WorldObject):
         self._target_y = self.y
         self._rng = random.Random(self.seed)
 
-    def update(self, dt: float) -> None:
+    def update(self, dt: float, observer: Observer | None = None) -> None:
+        # If observer is too close, override the current target with a flee
+        # heading. Movement code below then drives toward whichever target
+        # is current — flee or wander — at the appropriate speed.
+        fleeing = self._maybe_flee(observer)
+        speed = self.speed * (self.flee_speed_multiplier if fleeing else 1.0)
+        self._step_toward_target(dt, speed)
+
+    def _maybe_flee(self, observer: Observer | None) -> bool:
+        if observer is None or self.flee_distance <= 0.0:
+            return False
+        dx = self.x - observer.x
+        dy = self.y - observer.y
+        dist = math.hypot(dx, dy)
+        if dist > self.flee_distance:
+            return False
+        # Set target heading directly away from the observer.
+        if dist < 1e-6:
+            # Observer is right on top of us — flee in a random direction.
+            angle = self._rng.uniform(-math.pi, math.pi)
+            ux, uy = math.cos(angle), math.sin(angle)
+        else:
+            ux, uy = dx / dist, dy / dist
+        flee_step = self.flee_distance * 1.5
+        self._target_x = self.x + ux * flee_step
+        self._target_y = self.y + uy * flee_step
+        return True
+
+    def _step_toward_target(self, dt: float, speed: float) -> None:
         dx = self._target_x - self.x
         dy = self._target_y - self.y
         dist = math.hypot(dx, dy)
         if dist < self.arrival_tolerance:
-            # Reached target — pick a new one inside the roam circle.
+            # Reached target — pick a new one inside the roam circle. After
+            # a flee, this is the path back home (since the new target is
+            # constrained to roam_radius from home).
             angle = self._rng.uniform(-math.pi, math.pi)
             r = self._rng.uniform(0.0, self.roam_radius)
             self._target_x = (self.home_x or 0.0) + r * math.cos(angle)
             self._target_y = (self.home_y or 0.0) + r * math.sin(angle)
             return
-        step = min(self.speed * dt, dist)
+        step = min(speed * dt, dist)
         self.x += step * dx / dist
         self.y += step * dy / dist
 
@@ -141,6 +199,14 @@ class PathWalker(WorldObject):
     advances to the next one and loops at the end. The person.
 
     `waypoints` is a list of (x, y) tuples. An empty list means stand still.
+
+    Reactive behaviour: if `yield_distance > 0` and an `observer` is within
+    that distance AND inside the forward ~60° cone (i.e. roughly in the
+    walker's path), the walker stops moving for this tick. This is the
+    person seeing the robot in their way and pausing, expecting the robot
+    to move. Note: there's no escape — if the operator never moves, the
+    walker waits indefinitely. That's by design; M? could add an "I'll
+    just go around" behaviour later.
     """
 
     dynamic: ClassVar[bool] = True
@@ -148,10 +214,17 @@ class PathWalker(WorldObject):
     waypoints: list[tuple[float, float]] = field(default_factory=list)
     speed: float = 0.3
     arrival_tolerance: float = 0.08
+    # Reactive params. yield_distance=0 disables yielding (back-compat).
+    yield_distance: float = 0.0
+    # Cosine of the half-angle of the forward cone in which observers count
+    # as "in my path". 0.5 = 60° half-angle. Higher = narrower cone.
+    yield_cone_cos: float = 0.5
 
     _wp_index: int = field(init=False, default=0)
 
-    def update(self, dt: float) -> None:
+    def update(self, dt: float, observer: Observer | None = None) -> None:
+        if self._should_yield(observer):
+            return  # don't move this tick
         if not self.waypoints:
             return
         wx, wy = self.waypoints[self._wp_index]
@@ -163,6 +236,26 @@ class PathWalker(WorldObject):
         step = min(self.speed * dt, dist)
         self.x += step * dx / dist
         self.y += step * dy / dist
+
+    def _should_yield(self, observer: Observer | None) -> bool:
+        if observer is None or self.yield_distance <= 0.0 or not self.waypoints:
+            return False
+        dx = observer.x - self.x
+        dy = observer.y - self.y
+        dist = math.hypot(dx, dy)
+        if dist > self.yield_distance:
+            return False
+        if dist < 1e-6:
+            return True  # observer right on top of us — definitely yield
+        # Heading vector: from current position toward current waypoint.
+        wx, wy = self.waypoints[self._wp_index]
+        hdx, hdy = wx - self.x, wy - self.y
+        hdist = math.hypot(hdx, hdy)
+        if hdist < 1e-6:
+            return False
+        # Cosine of angle between heading and direction-to-observer.
+        cos_angle = (dx * hdx + dy * hdy) / (dist * hdist)
+        return cos_angle > self.yield_cone_cos
 
 
 @dataclass
@@ -292,15 +385,20 @@ class World:
 
     # ── tick ────────────────────────────────────────────────────────────────
 
-    def tick(self, dt: float) -> None:
-        """Advance all dynamic entities by `dt` seconds, tracking velocity."""
+    def tick(self, dt: float, observer: Observer | None = None) -> None:
+        """
+        Advance all dynamic entities by `dt` seconds, tracking velocity.
+
+        `observer` (typically the robot's pose) is forwarded to each
+        entity's update() method so reactive entities can respond to it.
+        """
         for obj in self.objects:
             if obj.dynamic:
                 # Snapshot before update so velocity_of() can compute dx/dt.
                 obj._prev_x = obj.x
                 obj._prev_y = obj.y
                 obj._tick_dt = dt
-                obj.update(dt)
+                obj.update(dt, observer=observer)
 
     def velocity_of(self, obj: WorldObject) -> tuple[float, float]:
         """Instantaneous velocity (m/s) recovered from the last tick."""
@@ -348,6 +446,9 @@ def default_scene() -> World:
                 description="a small black cat, currently wandering",
                 speed=0.15,
                 roam_radius=0.8,
+                # Reactive: cats don't like robots getting too close.
+                flee_distance=0.6,
+                flee_speed_multiplier=2.5,
                 # No seed → unpredictable in production. Tests pass their own.
             ),
             PathWalker(
@@ -357,6 +458,8 @@ def default_scene() -> World:
                 category="person",
                 description="a person walking around the apartment",
                 speed=0.4,
+                # Reactive: pause when the robot is in our way.
+                yield_distance=1.0,
                 # A counter-clockwise loop around the room periphery,
                 # threading between the static furniture.
                 waypoints=[

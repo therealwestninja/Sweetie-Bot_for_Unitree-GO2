@@ -12,6 +12,7 @@ from sweetie.sim.world import (
     QUADRANT_FRONT,
     QUADRANT_LEFT,
     QUADRANT_RIGHT,
+    Observer,
     PathWalker,
     Wanderer,
     World,
@@ -404,3 +405,198 @@ def test_visible_summary_motion_stationary_when_unmoved():
     w.tick(0.1)  # speed=0 → cat doesn't move
     summary = w.visible_summary(0, 0)
     assert summary[0]["motion"] == "stationary"
+
+
+# ── M? reactive: Observer dataclass ─────────────────────────────────────────
+
+
+def test_observer_is_frozen():
+    """Observer should be immutable to prevent accidental mutation by entities."""
+    o = Observer(1.0, 2.0, 0.5)
+    with pytest.raises(Exception):  # dataclasses.FrozenInstanceError on 3.11+
+        o.x = 999.0
+
+
+def test_observer_default_yaw():
+    o = Observer(1.0, 2.0)
+    assert o.yaw == 0.0
+
+
+# ── M? reactive: Wanderer flees ─────────────────────────────────────────────
+
+
+def test_wanderer_default_does_not_flee():
+    """Backward-compat: Wanderer with no flee_distance ignores observers."""
+    cat = Wanderer(name="c", x=0, y=0, speed=0.0, seed=1)
+    pre = (cat.x, cat.y)
+    cat.update(0.1, observer=Observer(0.05, 0, 0))  # observer right next to cat
+    assert (cat.x, cat.y) == pre
+
+
+def test_wanderer_with_flee_distance_ignores_far_observer():
+    cat = Wanderer(
+        name="c", x=0, y=0, speed=1.0, roam_radius=2.0, seed=1,
+        flee_distance=0.5, flee_speed_multiplier=3.0,
+    )
+    # First tick picks a wander target. Observer is far away → no flee.
+    cat.update(0.05, observer=Observer(5.0, 5.0))
+    cat.update(0.05, observer=Observer(5.0, 5.0))
+    # Cat should be moving toward its wander target at normal speed (≤ 0.05m/tick)
+    speed = math.hypot(cat.x, cat.y) / 0.05
+    assert speed < 1.5  # not the 3.0x flee speed
+
+
+def test_wanderer_flees_when_observer_close():
+    """Cat should move noticeably away from a close observer."""
+    cat = Wanderer(
+        name="c", x=0.0, y=0.0, speed=0.5, roam_radius=2.0, seed=2,
+        flee_distance=1.0, flee_speed_multiplier=3.0,
+    )
+    # Observer to the +x side of the cat → cat should head -x
+    obs = Observer(0.5, 0.0)  # 0.5m away, well inside flee_distance
+    cat.update(0.1, observer=obs)
+    assert cat.x < 0  # moved away from observer
+
+
+def test_wanderer_flees_at_increased_speed():
+    """Compared to non-fleeing, a fleeing cat covers more ground per tick."""
+    seed = 7
+    # Non-fleeing baseline: same cat with no observer.
+    a = Wanderer(name="a", x=0.0, y=0.0, speed=0.5, roam_radius=2.0, seed=seed)
+    a.update(0.1)  # picks target
+    a.update(0.1)
+    base_dist = math.hypot(a.x, a.y)
+
+    # Fleeing: same params, but with a close observer triggering flee.
+    b = Wanderer(
+        name="b", x=0.0, y=0.0, speed=0.5, roam_radius=2.0, seed=seed,
+        flee_distance=1.0, flee_speed_multiplier=3.0,
+    )
+    obs = Observer(0.4, 0.0)
+    b.update(0.1, observer=obs)
+    flee_dist = math.hypot(b.x, b.y)
+
+    assert flee_dist > base_dist
+
+
+def test_wanderer_resumes_wandering_after_observer_leaves():
+    """Once the observer is gone, the cat picks a new wander target."""
+    cat = Wanderer(
+        name="c", x=0.0, y=0.0, speed=2.0, roam_radius=1.0, seed=3,
+        flee_distance=1.0, flee_speed_multiplier=2.0,
+    )
+    # Flee for a while
+    for _ in range(20):
+        cat.update(0.05, observer=Observer(0.1, 0.0))
+    fled_pos = (cat.x, cat.y)
+    # Observer gone — keep ticking, eventually cat should start moving back
+    for _ in range(50):
+        cat.update(0.05)
+    # The cat should not be heading further away from home in perpetuity.
+    # We just check it's now within 2x roam_radius from home (won't drift forever).
+    home_dist = math.hypot(cat.x - cat.home_x, cat.y - cat.home_y)
+    assert home_dist <= 2.5  # bounded
+
+
+# ── M? reactive: PathWalker yields ──────────────────────────────────────────
+
+
+def test_path_walker_default_does_not_yield():
+    """Backward-compat: yield_distance=0 ignores observers."""
+    p = PathWalker(name="p", x=0, y=0, waypoints=[(1, 0)], speed=1.0)
+    p.update(0.1, observer=Observer(0.1, 0))  # observer right in front
+    assert p.x > 0  # still moved
+
+
+def test_path_walker_yields_to_observer_in_forward_cone():
+    p = PathWalker(
+        name="p", x=0, y=0, waypoints=[(1, 0)], speed=1.0,
+        yield_distance=0.8,
+    )
+    pre = (p.x, p.y)
+    # Observer is in the forward cone (0.5m ahead) → should yield
+    p.update(0.1, observer=Observer(0.5, 0.0))
+    assert (p.x, p.y) == pre
+
+
+def test_path_walker_does_not_yield_to_observer_behind():
+    """Observer behind shouldn't trigger yield."""
+    p = PathWalker(
+        name="p", x=0, y=0, waypoints=[(1, 0)], speed=1.0,
+        yield_distance=0.8,
+    )
+    # Heading +x, observer at -x → behind us
+    p.update(0.1, observer=Observer(-0.5, 0.0))
+    assert p.x > 0  # moved forward
+
+
+def test_path_walker_does_not_yield_to_observer_far_away():
+    p = PathWalker(
+        name="p", x=0, y=0, waypoints=[(1, 0)], speed=1.0,
+        yield_distance=0.5,
+    )
+    p.update(0.1, observer=Observer(2.0, 0.0))  # outside yield_distance
+    assert p.x > 0
+
+
+def test_path_walker_does_not_yield_to_observer_to_the_side():
+    p = PathWalker(
+        name="p", x=0, y=0, waypoints=[(1, 0)], speed=1.0,
+        yield_distance=0.8,
+    )
+    # Observer is 90° to the side, outside the forward cone
+    p.update(0.1, observer=Observer(0.0, 0.5))
+    assert p.x > 0
+
+
+def test_path_walker_resumes_walking_when_observer_leaves():
+    p = PathWalker(
+        name="p", x=0, y=0, waypoints=[(1, 0)], speed=1.0,
+        yield_distance=0.8,
+    )
+    # Yielding
+    p.update(0.1, observer=Observer(0.5, 0.0))
+    assert p.x == 0
+    # Observer leaves
+    p.update(0.1)
+    assert p.x > 0
+
+
+# ── M? reactive: World.tick passes observer ─────────────────────────────────
+
+
+def test_world_tick_forwards_observer_to_dynamic_objects():
+    """If World.tick is called with an observer, it reaches each dynamic entity."""
+    cat = Wanderer(
+        name="c", x=0.0, y=0.0, speed=1.0, roam_radius=2.0, seed=1,
+        flee_distance=1.0, flee_speed_multiplier=3.0,
+    )
+    w = World([cat])
+    obs = Observer(0.3, 0.0)  # close — should trigger flee
+    w.tick(0.1, observer=obs)
+    # Cat should have moved away from the observer (negative x direction)
+    assert cat.x < 0
+
+
+def test_world_tick_without_observer_still_works():
+    """Backward-compat: tick(dt) with no observer still ticks entities."""
+    cat = Wanderer(name="c", x=0, y=0, speed=1.0, roam_radius=2.0, seed=1)
+    w = World([cat])
+    w.tick(0.1)
+    w.tick(0.1)
+    # Cat moved
+    assert (cat.x, cat.y) != (0.0, 0.0)
+
+
+def test_default_scene_cat_is_reactive():
+    """The default scene cat has fleeing enabled."""
+    s = default_scene()
+    cat = next(o for o in s.objects if o.name == "cat")
+    assert cat.flee_distance > 0
+
+
+def test_default_scene_person_is_reactive():
+    """The default scene person has yielding enabled."""
+    s = default_scene()
+    person = next(o for o in s.objects if o.name == "person")
+    assert person.yield_distance > 0
