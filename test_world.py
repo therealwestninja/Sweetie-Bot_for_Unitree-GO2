@@ -290,3 +290,117 @@ def test_default_scene_has_dynamic_entities():
     dyn_names = [o.name for o in s.objects if o.dynamic]
     assert "cat" in dyn_names
     assert "person" in dyn_names
+
+
+# ── M?-scene: categories ────────────────────────────────────────────────────
+
+
+def test_world_object_default_category():
+    o = WorldObject("rock", 0, 0)
+    assert o.category == "object"
+
+
+def test_default_scene_assigns_categories():
+    s = default_scene()
+    cats = {o.name: o.category for o in s.objects}
+    assert cats["cat"] == "animal"
+    assert cats["person"] == "person"
+    assert cats["couch"] == "furniture"
+    assert cats["door"] == "fixture"
+    assert cats["rug"] == "decor"
+
+
+def test_to_dict_includes_category():
+    o = WorldObject("foo", 0, 0, category="furniture")
+    assert o.to_dict()["category"] == "furniture"
+
+
+# ── M?-scene: velocity tracking ─────────────────────────────────────────────
+
+
+def test_velocity_of_static_is_zero():
+    w = World([WorldObject("rock", 5, 5)])
+    w.tick(0.1)
+    assert w.velocity_of(w.objects[0]) == (0.0, 0.0)
+
+
+def test_velocity_of_before_first_tick_is_zero():
+    cat = Wanderer(name="c", x=0, y=0, speed=1.0, seed=1)
+    w = World([cat])
+    assert w.velocity_of(cat) == (0.0, 0.0)
+
+
+def test_velocity_of_dynamic_after_tick_is_nonzero():
+    cat = Wanderer(name="c", x=0, y=0, speed=1.0, roam_radius=2.0, seed=3)
+    w = World([cat])
+    # First tick: the wanderer's initial target equals its position, so it
+    # picks a fresh target this tick without moving. Second tick: moves.
+    w.tick(0.1)
+    w.tick(0.1)
+    vx, vy = w.velocity_of(cat)
+    speed = math.hypot(vx, vy)
+    assert speed > 0.0
+    assert speed <= 1.05  # tolerate float fuzz
+
+
+def test_velocity_consistent_with_path_walker_speed():
+    """A PathWalker at 1 m/s should report ~1 m/s velocity along its path."""
+    p = PathWalker(name="p", x=0, y=0, waypoints=[(10, 0)], speed=1.0)
+    w = World([p])
+    w.tick(0.1)
+    vx, vy = w.velocity_of(p)
+    assert vx == pytest.approx(1.0, abs=0.01)
+    assert abs(vy) < 0.01
+
+
+# ── M?-scene: visible_summary enrichment ────────────────────────────────────
+
+
+def test_visible_summary_includes_category():
+    w = World([WorldObject("couch", 1, 0, category="furniture")])
+    summary = w.visible_summary(0, 0)
+    assert summary[0]["category"] == "furniture"
+
+
+def test_visible_summary_static_object_has_no_motion_fields():
+    w = World([WorldObject("rock", 1, 0)])
+    summary = w.visible_summary(0, 0)
+    assert "motion" not in summary[0]
+    assert "velocity_mps" not in summary[0]
+
+
+def test_visible_summary_dynamic_includes_motion_fields():
+    cat = Wanderer(name="c", x=1.0, y=0.0, speed=0.5, roam_radius=1.0, seed=5)
+    w = World([cat])
+    w.tick(0.1)
+    summary = w.visible_summary(0, 0)
+    entry = summary[0]
+    assert "velocity_mps" in entry
+    assert "speed_mps" in entry
+    assert entry["motion"] in {"approaching", "receding", "parallel", "stationary"}
+
+
+def test_visible_summary_motion_approaching():
+    """An entity with velocity straight toward observer → 'approaching'."""
+    p = PathWalker(name="p", x=2.0, y=0.0, waypoints=[(0.0, 0.0)], speed=1.0)
+    w = World([p])
+    w.tick(0.1)  # moves p toward (0,0)
+    summary = w.visible_summary(0, 0)
+    assert summary[0]["motion"] == "approaching"
+
+
+def test_visible_summary_motion_receding():
+    p = PathWalker(name="p", x=1.0, y=0.0, waypoints=[(5.0, 0.0)], speed=1.0)
+    w = World([p])
+    w.tick(0.1)
+    summary = w.visible_summary(0, 0)
+    assert summary[0]["motion"] == "receding"
+
+
+def test_visible_summary_motion_stationary_when_unmoved():
+    """A dynamic entity that hasn't been ticked yet should read as stationary."""
+    cat = Wanderer(name="c", x=1, y=0, speed=0.0, seed=1)
+    w = World([cat])
+    w.tick(0.1)  # speed=0 → cat doesn't move
+    summary = w.visible_summary(0, 0)
+    assert summary[0]["motion"] == "stationary"

@@ -307,3 +307,30 @@ async def test_report_status_recent_assists_empty_by_default(setup):
     result = await setup["cog"]._dispatch_tool("report_status", {})
     snapshot = json.loads(result)
     assert snapshot["recent_assists"] == []
+
+
+# ── M?-scene: report_status carries categories, motion, perceptions ─────────
+
+
+@pytest.mark.asyncio
+async def test_report_status_includes_categories(setup):
+    """Each nearby object should carry its category."""
+    result = await setup["cog"]._dispatch_tool("report_status", {})
+    snapshot = json.loads(result)
+    objs = {o["name"]: o for o in snapshot["nearby_objects"]}
+    # The setup fixture uses a small world with default 'object' category;
+    # the field should be present regardless.
+    for o in objs.values():
+        assert "category" in o
+
+
+@pytest.mark.asyncio
+async def test_report_status_includes_recent_perceptions(setup):
+    """The bridge populates perception events; report_status surfaces them."""
+    # Wait briefly for the bridge to log the initial observation
+    await asyncio.sleep(0.1)
+    result = await setup["cog"]._dispatch_tool("report_status", {})
+    snapshot = json.loads(result)
+    assert "recent_perceptions" in snapshot
+    # We don't assert it's non-empty (timing-sensitive), only structurally present.
+    assert isinstance(snapshot["recent_perceptions"], list)

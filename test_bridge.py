@@ -214,3 +214,58 @@ async def test_bridge_tick_advances_dynamic_entities():
     await asyncio.sleep(0.5)
     assert (cat.x, cat.y) != start
     await b.disconnect()
+
+
+# ── M?-scene: perception events ─────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_recent_perceptions_empty_initially():
+    b = SimBridge()
+    await b.connect()
+    assert b.recent_perceptions() == []
+    await b.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_perception_logs_initial_observation():
+    """First tick should log where each dynamic entity starts (in range)."""
+    from sweetie.sim.world import Wanderer
+    cat = Wanderer(name="cat", x=1.0, y=0.0, speed=0.0)  # in front, not moving
+    w = World([cat])
+    b = SimBridge(world=w)
+    await b.connect()
+    await asyncio.sleep(0.1)
+    log = b.recent_perceptions()
+    assert any("cat" in e["event"] and "front" in e["event"] for e in log)
+    await b.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_perception_classify_quadrant_far():
+    """Entity beyond perception range should classify as 'far'."""
+    b = SimBridge()
+    await b.connect()
+    q = b._classify_quadrant(b.PERCEPTION_RANGE + 1.0, 0.0)
+    assert q == "far"
+    await b.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_perception_logs_quadrant_change_to_front():
+    """Entity moving from left into front should generate an event."""
+    from sweetie.sim.world import PathWalker
+    # Entity walks from left (0, 1) to front (1, 0)
+    p = PathWalker(
+        name="walker", x=0.0, y=1.0,
+        waypoints=[(1.0, 0.0)], speed=1.0,
+    )
+    w = World([p])
+    b = SimBridge(world=w)
+    await b.connect()
+    # Wait for the entity to traverse
+    await asyncio.sleep(2.0)
+    log = b.recent_perceptions()
+    events = [e["event"] for e in log]
+    assert any("walker" in e and "in front" in e for e in events)
+    await b.disconnect()

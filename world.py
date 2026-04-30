@@ -49,11 +49,22 @@ class WorldObject:
     y: float
     radius: float = 0.3
     description: str = ""
+    # Loose grouping the LLM can reason about: 'furniture', 'animal',
+    # 'person', 'fixture', 'decor', 'object'. Free-form; not enum'd because
+    # we want to grow the vocabulary without ceremony.
+    category: str = "object"
 
     # Class-level flag so `World` can pick out entities that need ticking.
     # Subclasses override this to True. Using a ClassVar keeps it out of
     # the dataclass field list, so it doesn't show up in __init__.
     dynamic: ClassVar[bool] = False
+
+    # Per-tick velocity tracking. World.tick() snapshots position before
+    # calling update(), so velocity_of(obj) can recover dx/dt afterward.
+    # Static objects keep these at zero forever; harmless overhead.
+    _prev_x: float = field(init=False, default=0.0)
+    _prev_y: float = field(init=False, default=0.0)
+    _tick_dt: float = field(init=False, default=0.0)
 
     def update(self, dt: float) -> None:
         """Advance this object by `dt` seconds. No-op for static objects."""
@@ -65,6 +76,7 @@ class WorldObject:
             "y": self.y,
             "radius": self.radius,
             "description": self.description,
+            "category": self.category,
             "dynamic": self.dynamic,
         }
 
@@ -227,8 +239,16 @@ class World:
     ) -> list[dict]:
         """
         Cheap "what's around me" report. No FOV cone, no occlusion — every
-        object within `max_range` is listed with its bearing and distance,
-        sorted near-to-far. Used by the LLM's report_status tool.
+        object within `max_range` is listed with its bearing, distance, and
+        category, sorted near-to-far. For dynamic entities, the entry also
+        carries a velocity vector and a `motion` heuristic ('approaching',
+        'receding', 'parallel', 'stationary') relative to the observer
+        position. Used by the LLM's report_status tool.
+
+        The motion classification assumes the observer is stationary. When
+        the robot itself is moving fast this is inaccurate, but the
+        operator's joystick speed is generally well below entity speeds,
+        and the LLM gets the raw velocity too if it wants to do better.
         """
         result: list[dict] = []
         for obj in self.objects:
@@ -237,14 +257,33 @@ class World:
             if dist > max_range:
                 continue
             bearing_deg = math.degrees(math.atan2(dy, dx))
-            result.append(
-                {
-                    "name": obj.name,
-                    "distance_m": round(dist, 2),
-                    "bearing_deg": round(bearing_deg, 1),
-                    "description": obj.description,
-                }
-            )
+            entry: dict = {
+                "name": obj.name,
+                "category": obj.category,
+                "distance_m": round(dist, 2),
+                "bearing_deg": round(bearing_deg, 1),
+                "description": obj.description,
+            }
+            if obj.dynamic:
+                vx, vy = self.velocity_of(obj)
+                speed = math.hypot(vx, vy)
+                entry["velocity_mps"] = {"x": round(vx, 2), "y": round(vy, 2)}
+                entry["speed_mps"] = round(speed, 2)
+                if speed < 0.05:
+                    entry["motion"] = "stationary"
+                elif dist < 1e-6:
+                    entry["motion"] = "at observer"
+                else:
+                    # Closing = entity moving toward observer (positive when approaching).
+                    ux, uy = dx / dist, dy / dist
+                    closing = -(vx * ux + vy * uy)
+                    if closing > 0.05:
+                        entry["motion"] = "approaching"
+                    elif closing < -0.05:
+                        entry["motion"] = "receding"
+                    else:
+                        entry["motion"] = "parallel"
+            result.append(entry)
         result.sort(key=lambda r: r["distance_m"])
         return result
 
@@ -254,10 +293,23 @@ class World:
     # ── tick ────────────────────────────────────────────────────────────────
 
     def tick(self, dt: float) -> None:
-        """Advance all dynamic entities by `dt` seconds."""
+        """Advance all dynamic entities by `dt` seconds, tracking velocity."""
         for obj in self.objects:
             if obj.dynamic:
+                # Snapshot before update so velocity_of() can compute dx/dt.
+                obj._prev_x = obj.x
+                obj._prev_y = obj.y
+                obj._tick_dt = dt
                 obj.update(dt)
+
+    def velocity_of(self, obj: WorldObject) -> tuple[float, float]:
+        """Instantaneous velocity (m/s) recovered from the last tick."""
+        if not obj.dynamic or obj._tick_dt == 0.0:
+            return (0.0, 0.0)
+        return (
+            (obj.x - obj._prev_x) / obj._tick_dt,
+            (obj.y - obj._prev_y) / obj._tick_dt,
+        )
 
 
 def default_scene() -> World:
@@ -274,19 +326,25 @@ def default_scene() -> World:
     return World(
         objects=[
             WorldObject("couch", x=2.0, y=1.5, radius=0.6,
+                        category="furniture",
                         description="a long soft couch along the wall"),
             WorldObject("coffee table", x=1.2, y=0.0, radius=0.4,
+                        category="furniture",
                         description="a low wooden coffee table"),
             WorldObject("kitchen counter", x=-1.5, y=2.5, radius=0.7,
+                        category="furniture",
                         description="the kitchen counter, with the sink"),
             WorldObject("door", x=-2.5, y=0.0, radius=0.2,
+                        category="fixture",
                         description="the doorway out to the hallway"),
             WorldObject("rug", x=1.0, y=0.5, radius=0.0,
+                        category="decor",
                         description="a patterned rug; not an obstacle"),
             Wanderer(
                 name="cat",
                 x=0.5, y=-1.5,
                 radius=0.15,
+                category="animal",
                 description="a small black cat, currently wandering",
                 speed=0.15,
                 roam_radius=0.8,
@@ -296,6 +354,7 @@ def default_scene() -> World:
                 name="person",
                 x=-2.0, y=1.5,
                 radius=0.25,
+                category="person",
                 description="a person walking around the apartment",
                 speed=0.4,
                 # A counter-clockwise loop around the room periphery,

@@ -17,6 +17,7 @@ import asyncio
 import logging
 import math
 import time
+from collections import deque
 from dataclasses import dataclass, field
 
 from sweetie.sim.world import PROXIMITY_MAX_RANGE, World
@@ -108,12 +109,23 @@ class SimBridge(BridgeBase):
     BATTERY_DRAIN_IDLE = 0.0001  # %/tick
     BATTERY_DRAIN_MOVING = 0.001
 
+    # Range beyond which an entity is considered "out of perceptual range"
+    # for the purposes of perception events. Slightly bigger than the
+    # proximity sensor max range to avoid flapping at the edge.
+    PERCEPTION_RANGE = 4.0  # m
+
     def __init__(self, world: World | None = None) -> None:
         self._state = RobotState()
         self._connected = False
         self._tick_task: asyncio.Task | None = None
         self._world = world
         self._yaw_target: float | None = None  # set by look_at_entity, cleared on goal-reached or move()
+        # Perception state — tracked per dynamic entity so we can emit
+        # events on quadrant transitions. Real hardware would replace
+        # this with output from a vision pipeline; for sim we cheat with
+        # ground-truth positions.
+        self._entity_quadrant: dict[str, str] = {}
+        self._perception_log: deque[tuple[float, str]] = deque(maxlen=20)
 
     @property
     def world(self) -> World | None:
@@ -249,6 +261,7 @@ class SimBridge(BridgeBase):
         if self._world is not None:
             self._world.tick(dt)
             s.range_obstacle = self._world.proximity_ranges(s.x, s.y, s.yaw)
+            self._update_perceptions()
 
         # Power.
         moving = any((s.vx, s.vy, s.vyaw))
@@ -257,3 +270,75 @@ class SimBridge(BridgeBase):
             s.battery_percent
             - (self.BATTERY_DRAIN_MOVING if moving else self.BATTERY_DRAIN_IDLE),
         )
+
+    # ── Perception (sim-only, ground-truth shortcut) ────────────────────────
+    #
+    # In real hardware this would be a vision/lidar pipeline producing
+    # entity-tracking events. For sim we just read positions out of the
+    # world and emit events on quadrant transitions. The seam here is
+    # `recent_perceptions()` — the LLM gets the same shape regardless of
+    # how the events were derived.
+
+    def _classify_quadrant(self, ox: float, oy: float) -> str:
+        """Return 'front'|'left'|'back'|'right'|'far' for a world-frame point."""
+        s = self._state
+        dx, dy = ox - s.x, oy - s.y
+        dist = math.hypot(dx, dy)
+        if dist > self.PERCEPTION_RANGE:
+            return "far"
+        cy, sy = math.cos(-s.yaw), math.sin(-s.yaw)
+        rx = dx * cy - dy * sy
+        ry = dx * sy + dy * cy
+        ang = math.atan2(ry, rx)
+        if -math.pi / 4 <= ang < math.pi / 4:
+            return "front"
+        if math.pi / 4 <= ang < 3 * math.pi / 4:
+            return "left"
+        if ang >= 3 * math.pi / 4 or ang < -3 * math.pi / 4:
+            return "back"
+        return "right"
+
+    def _update_perceptions(self) -> None:
+        """Track quadrant transitions for dynamic entities; log meaningful ones."""
+        if self._world is None:
+            return
+        now = time.time()
+        for obj in self._world.objects:
+            if not obj.dynamic:
+                continue
+            new_q = self._classify_quadrant(obj.x, obj.y)
+            old_q = self._entity_quadrant.get(obj.name)
+            if new_q == old_q:
+                continue
+            self._entity_quadrant[obj.name] = new_q
+            # Only log "interesting" transitions — entry/exit from range,
+            # and arrivals into the front quadrant (the most safety-relevant).
+            # Other transitions (back → left, left → right, etc.) are noise.
+            if old_q is None:
+                # First observation; note the initial location only if in range.
+                if new_q != "far":
+                    self._perception_log.append(
+                        (now, f"{obj.name} initially in {new_q} quadrant")
+                    )
+            elif old_q == "far" and new_q != "far":
+                self._perception_log.append(
+                    (now, f"{obj.name} entered range ({new_q})")
+                )
+            elif old_q != "far" and new_q == "far":
+                self._perception_log.append(
+                    (now, f"{obj.name} left visible range")
+                )
+            elif new_q == "front" and old_q in ("left", "right"):
+                self._perception_log.append(
+                    (now, f"{obj.name} now directly in front")
+                )
+
+    def recent_perceptions(self, window_s: float = 30.0) -> list[dict]:
+        """Return perception events from the last `window_s` seconds, newest last."""
+        now = time.time()
+        cutoff = now - window_s
+        return [
+            {"age_s": round(now - t, 1), "event": e}
+            for t, e in self._perception_log
+            if t >= cutoff
+        ]

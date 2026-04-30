@@ -56,6 +56,17 @@ around the apartment. Their positions change over time, so don't rely on \
 old report_status results when the operator asks where something is — \
 call `report_status` again for fresh data.
 
+Each object has a `category` ('furniture', 'animal', 'person', 'fixture', \
+'decor'). Use these to talk about the scene naturally rather than reciting \
+names. For dynamic entities, `report_status` also includes a velocity and \
+a `motion` field ('approaching', 'receding', 'parallel', 'stationary') \
+relative to the robot — these are useful when the operator asks 'is that \
+the cat coming toward me?'.
+
+`recent_perceptions` lists transitions you've just noticed — entities \
+entering/leaving range, or stepping in front of you. If the operator asks \
+'did anything just happen?' or 'who's around?', check there too.
+
 A smart-assist layer in the safety system automatically slows or blocks \
 the operator's joystick commands when an obstacle is too close in the \
 direction of motion. When this happens, it's recorded as an assist event. \
@@ -300,6 +311,14 @@ class Cognition:
                 "right": round(state.range_obstacle[3], 2),
             },
             "recent_assists": self._safety.recent_assists(),
+            # Perception events come from the bridge (sim only for now —
+            # RealBridge would compute these from camera/lidar). Tolerated
+            # absence keeps this robust as bridge implementations evolve.
+            "recent_perceptions": (
+                self._bridge.recent_perceptions()
+                if hasattr(self._bridge, "recent_perceptions")
+                else []
+            ),
         }
         # Include nearby world objects when a world is attached.
         world = getattr(self._bridge, "world", None)
