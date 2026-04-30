@@ -735,6 +735,99 @@ def studio_scene() -> World:
     )
 
 
+# ── Procedural obstacle scenes ──────────────────────────────────────────────
+#
+# Random scattered obstacles in a bounded area. Useful for stress-testing
+# navigation, smart-assist scaling, and the LLM's reaction to "this place
+# is full of stuff" without hand-placing 200 rocks. Pattern borrowed from
+# `isaac_go2_ros2/sim_env.py` (BSD-2 RoboVerse community 2024) — in their
+# Isaac Sim setup, terrain generators procedurally place hurdles, ramps,
+# and rough patches in a randomized arena. We do the same in 2D.
+#
+# Three densities are exposed: sparse, medium, dense. The same RNG seed
+# is used every time so tests are reproducible and runs stay comparable.
+# A clearance disk around the origin keeps the robot's spawn point free.
+
+
+def _generate_obstacle_field(
+    count: int,
+    seed: int,
+    *,
+    bounds: tuple[float, float, float, float] = (-9.0, 9.0, -9.0, 9.0),
+    spawn_clearance: float = 1.5,
+    radius_min: float = 0.20,
+    radius_max: float = 0.60,
+) -> list[WorldObject]:
+    """Place `count` deterministic random obstacles within `bounds`.
+
+    Obstacles are simple rocks (`category="prop"`, `obstacle=True`).
+    Origin (0, 0) is kept clear within `spawn_clearance` so the robot
+    can stand and turn before it has to deal with anything. Bounded
+    rejection-sampling — if 200 attempts can't place an obstacle without
+    overlapping a previous one or violating spawn clearance, we move on
+    with whatever was placed (so densities are best-effort, not exact).
+    """
+    import random
+
+    rng = random.Random(seed)
+    x_min, x_max, y_min, y_max = bounds
+    placed: list[WorldObject] = []
+
+    for i in range(count):
+        for _attempt in range(200):
+            x = rng.uniform(x_min, x_max)
+            y = rng.uniform(y_min, y_max)
+            r = rng.uniform(radius_min, radius_max)
+            # Spawn clearance: don't drop a rock on the robot.
+            if math.hypot(x, y) < spawn_clearance + r:
+                continue
+            # No overlap with already-placed obstacles.
+            if any(
+                math.hypot(x - p.x, y - p.y) < (r + p.radius + 0.10)
+                for p in placed
+            ):
+                continue
+            placed.append(WorldObject(
+                name=f"rock {i + 1}",
+                x=x, y=y, radius=round(r, 2),
+                category="prop",
+                description=f"a rock, ~{round(r * 100)} cm across",
+            ))
+            break
+    return placed
+
+
+_OBSTACLE_FIELD_REGION = Region(
+    name="obstacle-field",
+    x_min=-9.0, x_max=9.0, y_min=-9.0, y_max=9.0,
+    description="an open field scattered with rocks of varying size",
+)
+
+
+def obstacle_sparse_scene() -> World:
+    """~50 random rocks. Light density — easy to navigate around."""
+    return World(
+        objects=_generate_obstacle_field(count=50, seed=1),
+        regions=[_OBSTACLE_FIELD_REGION],
+    )
+
+
+def obstacle_medium_scene() -> World:
+    """~100 random rocks. Realistic outdoor-ish density."""
+    return World(
+        objects=_generate_obstacle_field(count=100, seed=2),
+        regions=[_OBSTACLE_FIELD_REGION],
+    )
+
+
+def obstacle_dense_scene() -> World:
+    """~200 random rocks. Stress-test density — many will fail to place."""
+    return World(
+        objects=_generate_obstacle_field(count=200, seed=3),
+        regions=[_OBSTACLE_FIELD_REGION],
+    )
+
+
 # ── Scene registry ──────────────────────────────────────────────────────────
 
 SCENES: dict[str, "callable"] = {
@@ -743,6 +836,9 @@ SCENES: dict[str, "callable"] = {
     "stairs":    stairs_scene,
     "agility":   agility_scene,
     "studio":    studio_scene,
+    "obstacle-sparse": obstacle_sparse_scene,
+    "obstacle-medium": obstacle_medium_scene,
+    "obstacle-dense":  obstacle_dense_scene,
 }
 
 

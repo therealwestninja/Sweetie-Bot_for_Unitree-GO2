@@ -8,7 +8,7 @@ actual robot.
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](#license)
-[![Tests: 260](https://img.shields.io/badge/tests-260%20passing-brightgreen.svg)](#tests)
+[![Tests: 274](https://img.shields.io/badge/tests-274%20passing-brightgreen.svg)](#tests)
 [![Status: sim-only](https://img.shields.io/badge/status-sim%20only-yellow.svg)](#hardware-integration-status)
 
 ---
@@ -63,7 +63,7 @@ All knobs are environment variables. Everything has sensible defaults.
 | `SWEETIE_HOST` / `SWEETIE_PORT` | `127.0.0.1` / `8000` | Where the FastAPI server binds |
 | `SWEETIE_MODEL`             | `claude-sonnet-4-5` | Anthropic model name |
 | `SWEETIE_BRIDGE`            | `sim`         | `sim` (kinematic simulator) or `real` (Unitree Go2 over DDS) |
-| `SWEETIE_SCENE`             | `studio`      | `studio` / `apartment` / `street` / `stairs` / `agility` (sim only) |
+| `SWEETIE_SCENE`             | `studio`      | `studio`/`apartment`/`street`/`stairs`/`agility`/`obstacle-sparse`/`obstacle-medium`/`obstacle-dense` (sim only) |
 | `SWEETIE_NETWORK_INTERFACE` | `eth0`        | DDS network interface (real bridge only) |
 | `SWEETIE_DDS_DOMAIN`        | `0`           | DDS domain ID (real bridge only) |
 | `SWEETIE_AMBIENT`           | `off`         | `on` enables LLM commenting unprompted on bus events |
@@ -74,13 +74,16 @@ All knobs are environment variables. Everything has sensible defaults.
 Pick one with `SWEETIE_SCENE=…`. The default `studio` is the full
 backlot; the others are focused practice areas:
 
-| Scene       | Objects | Best for                                                |
-| ----------- | -------:| ------------------------------------------------------- |
-| `studio`    | 38      | The full world, four named regions, both dynamic entities |
-| `apartment` |  7      | Reactive entities (cat scrambles, person yields), basic safety |
-| `street`    | 16      | Static obstacle navigation: car, hydrant, lamp, cones, fence, curbs |
-| `stairs`    |  7      | Spatial reasoning around 2/3/5/8-step runs and the L-bend |
-| `agility`   |  8      | Apple boxes plus passable terrain (slope/hill/moguls/gravel) |
+| Scene             | Objects | Best for                                                |
+| ----------------- | -------:| ------------------------------------------------------- |
+| `studio`          | 38      | The full world, four named regions, both dynamic entities |
+| `apartment`       |  7      | Reactive entities (cat scrambles, person yields), basic safety |
+| `street`          | 16      | Static obstacle navigation: car, hydrant, lamp, cones, fence, curbs |
+| `stairs`          |  7      | Spatial reasoning around 2/3/5/8-step runs and the L-bend |
+| `agility`         |  8      | Apple boxes plus passable terrain (slope/hill/moguls/gravel) |
+| `obstacle-sparse` | 50      | Light random obstacle field — easy navigation         |
+| `obstacle-medium` | 100     | Moderate density — realistic outdoor stress test      |
+| `obstacle-dense`  | 200     | Dense field — many rocks, tight gaps, smart-assist workout |
 
 The named-scene-registry pattern is borrowed from
 [`isaac_go2_ros2/sim_env.py`](third_party/isaac_go2_ros2/sim_env.py)
@@ -205,7 +208,16 @@ What is NOT verified:
 First hardware bring-up should be treated as bring-up. Expect to debug.
 The cross-reference doc at [`docs/go2-references.md`](docs/go2-references.md)
 maps our integration against four other open-source Go2 projects
-(BSD-2-Clause); start there.
+(BSD-2-Clause); start there. There's also a read-only diagnostic tool:
+
+```bash
+python -m sweetie.tools.preflight --interface eth0 --domain 0
+```
+
+It checks SDK import, DDS init, topic publishing on `rt/sportmodestate`
+and `rt/lowstate`, and observes mode codes the robot is actually emitting
+— without sending any commands. Run this before letting `RealBridge`
+issue motion commands. Exit code 0 = all checks passed.
 
 ## Tests
 
@@ -213,19 +225,21 @@ maps our integration against four other open-source Go2 projects
 pytest
 ```
 
-260 tests, all passing as of this README. Coverage includes:
+274 tests, all passing as of this README. Coverage includes:
 
-- Safety FSM transitions, predicate ticks, proximity-aware scaling
+- Safety FSM transitions, predicate ticks, proximity-aware scaling,
+  battery-low and tilt auto-trip
 - Bridge: connect/disconnect, command dispatch, integration, look_at,
   reactive entities, perception, region tracking, body height, navigation
 - World: lookups, geometry, categories, velocity, motion classification,
-  reactive flee/yield, scene registry, regions
+  reactive flee/yield, scene registry, regions, procedural obstacle fields
 - Perception: quadrant transitions, FOV cone, occlusion, vision events
 - Cognition: tool dispatch, safety integration, look_at outcomes,
-  report_status structure
+  report_status structure, scene-aware system prompt
 - Real bridge: 25 mock-based tests against the documented SDK surface
+- Preflight diagnostic: SDK init, DDS connect, topic publishing, schema
+  validation, mode-code observation
 - Ambient: cooldown, lock, silent-response handling, bus subscription
-- Scene registry: per-scene object filtering, region attachment
 
 ## Layout
 
@@ -240,11 +254,13 @@ sweetie/
 │   ├── llm.py           # Anthropic client, tools, chat loop, ambient_react.
 │   └── ambient.py       # Bus-event-driven unprompted commentary (opt-in).
 ├── sim/
-│   ├── world.py         # 38 named objects, 4 named regions, scene registry.
+│   ├── world.py         # Named objects + regions + scene registry (8 scenes).
 │   └── perception.py    # SimPerception: quadrants + vision FOV + occlusion.
-└── teleop/
-    ├── server.py        # FastAPI: /ws + /api/chat + /api/world + static UI.
-    └── static/          # The operator console (HTML + CSS + vanilla JS).
+├── teleop/
+│   ├── server.py        # FastAPI: /ws + /api/chat + /api/world + static UI.
+│   └── static/          # The operator console (HTML + CSS + vanilla JS).
+└── tools/
+    └── preflight.py     # Read-only hardware bring-up diagnostic.
 
 docs/
 └── go2-references.md    # Cross-reference vs upstream Go2 projects.

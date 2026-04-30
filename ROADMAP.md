@@ -24,8 +24,8 @@ more useful than version numbers anyway.
 | Latching E-STOP (joystick + spacebar)     | ✅       | Cleared explicitly via UI                                  |
 | Heartbeat-driven safety drop              | ✅       | WS connection loss → auto E-STOP                           |
 | Smart-assist event log                    | ✅       | Visible in chat, queryable via `report_status`             |
-| Battery-low → E-STOP threshold            | ⏳       | Hardware-only concern; sim drains 0.001%/move-tick         |
-| Tilt-tilted → E-STOP threshold            | ⏳       | Hardware-only concern                                      |
+| Battery-low → E-STOP threshold            | ✅       | Auto-trip at <15%; `predicate_tick` checks each frame      |
+| Tilt → E-STOP threshold                   | ✅       | Auto-trip at \|roll\| or \|pitch\| > 0.6 rad (~34°)         |
 
 ### Motion
 
@@ -69,7 +69,7 @@ more useful than version numbers anyway.
 | Slopes / hills / moguls / gravel          | ✅       | Passable terrain; not physically simulated                 |
 | Entity goals beyond reactive              | ⏳       | Cat to-rug, person-with-errands; mostly polish             |
 | Multi-floor scenes                        | 🚫       | Out of scope: no Z axis. See "kinematic vs physics" below  |
-| Procedurally generated obstacle fields    | ⏳       | Pattern from `isaac_go2_ros2/sim_env.py`                   |
+| Procedurally generated obstacle fields    | ✅       | `obstacle-sparse` (50), `obstacle-medium` (100), `obstacle-dense` (200); pattern from `isaac_go2_ros2/sim_env.py` |
 
 ### Cognition
 
@@ -79,7 +79,7 @@ more useful than version numbers anyway.
 | Tool calls visible to operator            | ✅       | "do" / "do✗" lines in chat                                 |
 | `report_status` snapshot (proximity, vision, region, perception, assists) | ✅ | Single read-only window |
 | Ambient cognition (LLM speaks unprompted) | ✅       | Opt-in via `SWEETIE_AMBIENT=on`; cooldown-protected        |
-| Scene-aware system prompt                 | ⏳       | Currently describes full backlot regardless of scene       |
+| Scene-aware system prompt                 | ✅       | Built from live `World` — no hallucinated objects, dynamic-entity guidance only when relevant |
 | Sliding-window history (token budget)     | ⏳       | History grows unbounded today; fine for short sessions     |
 | Multi-LLM (e.g. local model fallback)     | 🚫       | Out of scope: keeps the architecture simple                |
 
@@ -90,6 +90,7 @@ more useful than version numbers anyway.
 | `RealBridge` (DDS over `unitree_sdk2py`)  | 🟡       | Code exists, **not runtime-tested** against a Go2          |
 | Sport mode commands (StandUp/Down/Move/Damp etc.) | 🟡 | Mock-tested integration shape; needs hardware verification |
 | `BodyHeight` SDK call                     | 🟡       | Wired to `set_body_height`; absolute → relative offset     |
+| Pre-flight bring-up diagnostic (`python -m sweetie.tools.preflight`) | ✅ | Read-only SDK/DDS/topic check; runs without sending commands |
 | WebRTC transport (alternative to DDS)     | 🚫       | Reference materials kept; transport choice is firmly DDS   |
 | Audio hub (TTS through robot speaker)     | ⏳       | API IDs known (`AUDIO_HUB_COMMANDS`)                       |
 | Camera frame ingestion                    | ⏳       | Required prerequisite for real perception                  |
@@ -171,9 +172,11 @@ then would slow everything else for no clear gain.
 When a Go2 is available, this is the rough order of operations. Don't
 treat as authoritative; revise on contact with reality.
 
-1. **Network and DDS.** Confirm interface name (`eth0` / `enp0s3` /
-   `wlan0`) and domain ID. Verify `ros2 topic list` shows
-   `/rt/sportmodestate` and `/rt/lowstate`. Resolve any firewall issues.
+1. **Network and DDS.** Start with `python -m sweetie.tools.preflight
+   --interface <iface> --domain <id>`. It's read-only: confirms SDK
+   imports, DDS initializes, and `/rt/sportmodestate` + `/rt/lowstate`
+   are publishing the fields we expect. If preflight fails, sweetie's
+   `RealBridge` will fail too — fix here first.
 
 2. **`unitree_sdk2py` install.** `pip install -e .[real]` may not work
    if the upstream package isn't on PyPI in your region; fall back to

@@ -834,3 +834,72 @@ def test_focused_scenes_have_their_own_region():
     assert {r.name for r in street_scene().regions} == {"street"}
     assert {r.name for r in stairs_scene().regions} == {"stairs"}
     assert {r.name for r in agility_scene().regions} == {"agility"}
+
+
+# ── Procedural obstacle scenes ──────────────────────────────────────────────
+
+
+def test_obstacle_scenes_register_in_scene_registry():
+    from sweetie.sim.world import SCENES, get_scene
+    assert "obstacle-sparse" in SCENES
+    assert "obstacle-medium" in SCENES
+    assert "obstacle-dense" in SCENES
+    # And dispatch works
+    assert len(get_scene("obstacle-sparse").objects) > 0
+
+
+def test_obstacle_sparse_has_roughly_50_rocks():
+    from sweetie.sim.world import obstacle_sparse_scene
+    s = obstacle_sparse_scene()
+    # Count is best-effort due to rejection sampling, but should land
+    # close to 50. With a 18×18 m arena and small obstacles, all 50
+    # should place.
+    assert 40 <= len(s.objects) <= 50
+    assert all(o.category == "prop" for o in s.objects)
+
+
+def test_obstacle_medium_more_than_sparse():
+    from sweetie.sim.world import obstacle_medium_scene, obstacle_sparse_scene
+    assert len(obstacle_medium_scene().objects) > len(obstacle_sparse_scene().objects)
+
+
+def test_obstacle_dense_more_than_medium():
+    from sweetie.sim.world import obstacle_dense_scene, obstacle_medium_scene
+    # Dense will hit rejection sampling limits — won't fit 200, but
+    # should fit more than 100.
+    assert len(obstacle_dense_scene().objects) > len(obstacle_medium_scene().objects)
+
+
+def test_obstacle_field_deterministic():
+    """Same seed → same scene. Required for reproducible tests/runs."""
+    from sweetie.sim.world import obstacle_sparse_scene
+    a = obstacle_sparse_scene()
+    b = obstacle_sparse_scene()
+    assert len(a.objects) == len(b.objects)
+    for ao, bo in zip(a.objects, b.objects):
+        assert ao.x == bo.x
+        assert ao.y == bo.y
+        assert ao.radius == bo.radius
+
+
+def test_obstacle_field_keeps_origin_clear():
+    """No obstacle within spawn-clearance of origin."""
+    from sweetie.sim.world import obstacle_dense_scene
+    s = obstacle_dense_scene()
+    for o in s.objects:
+        # Spawn clearance is 1.5 m; obstacle edge must be outside that.
+        assert math.hypot(o.x, o.y) > 1.5 - 0.01
+
+
+def test_obstacle_scenes_have_obstacle_field_region():
+    """All three procedural scenes attach the same 'obstacle-field' region."""
+    from sweetie.sim.world import (
+        obstacle_dense_scene, obstacle_medium_scene, obstacle_sparse_scene,
+    )
+    for fn in (obstacle_sparse_scene, obstacle_medium_scene, obstacle_dense_scene):
+        s = fn()
+        assert len(s.regions) == 1
+        assert s.regions[0].name == "obstacle-field"
+        # Robot at origin should be inside the region
+        r = s.region_at(0, 0)
+        assert r is not None and r.name == "obstacle-field"
