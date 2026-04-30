@@ -1,105 +1,85 @@
-# sweetie
+# Third-party reference materials
 
-A small tele-op platform for a Unitree Go2 quadruped. Sim-only for now.
-Hybrid control: deterministic safety FSM, LLM for high-level chat/intent.
+This directory contains files from other open-source Go2 projects, included
+here verbatim for **reference**. They are not currently imported by the
+`sweetie` package — they exist so that someone bringing up real hardware
+can cross-check our `RealBridge` against authoritative sources without
+having to re-clone the upstream repos.
 
-## What this actually does, today
+Each subdirectory preserves the original project's LICENSE file at its
+root. Individual files retain their original copyright and SPDX headers
+where present. **Nothing here has been modified.**
 
-Milestones shipped: **M1, M2, M3, M4, M5, M?-scene, M7, M?-reactive**.
+## Provenance
 
-- Behavioural simulator (`SimBridge`) that integrates commanded velocity into pose at 50 Hz, populates proximity readings (front/left/back/right) from a small fake world, ticks moving entities, supports closed-loop yaw goals for "look at this thing", and tracks per-entity quadrant transitions for perception events.
-- Safety FSM (`SafetyGuard`) that gates every motion command and every action intent. States: `IDLE → ARMED → ACTIVE → ESTOP`. The guard also applies proximity-aware velocity scaling — operator joystick commands toward an obstacle are linearly slowed between 1.0 m and 0.3 m clearance, and zeroed below the hard floor. Driving away is always full-speed.
-- Web operator console: drag joystick to drive, ARM/DISARM/STAND/SIT buttons, latching E-STOP, telemetry strip, and a top-down world map showing the room and the robot's pose live. Smart-assist interventions show up as ⚠ amber chat lines.
-- Reactive LLM cognition: chat with Claude in the side panel. Six tools — `speak`, `stand_up`, `sit_down`, `halt`, `look_at`, `report_status` — all flowing through the same `SafetyGuard` the joystick does. `report_status` exposes proximity, recent assists, *and* — for each nearby object — its category and current motion (approaching/receding/stationary), plus a `recent_perceptions` log of meaningful transitions.
-- A small fake world (`sim/world.py`) with five static objects and two moving ones — a `Wanderer` cat and a `PathWalker` person. Each object carries a category. Both dynamic entities are *reactive*: the cat scrambles away when the robot gets within 0.6 m, and the person pauses when the robot is in their walking path within 1 m. The robot's `range_obstacle[4]` matches the schema the real Go2 publishes.
-- A `RealBridge` (`core/real_bridge.py`) for connecting to an actual Unitree Go2 over DDS via `unitree_sdk2py`. **This integration is unverified on hardware — see the warning below.** Selectable at startup via `SWEETIE_BRIDGE=real`.
+### `go2_ros2_sdk/`
 
-## Hardware integration status
+- **Source:** [github.com/abizovnuralem/go2_ros2_sdk](https://github.com/abizovnuralem/go2_ros2_sdk)
+- **Snapshot:** master branch, 2025-01-13
+- **License:** BSD 2-Clause
+- **Copyright:** RoboVerse community, 2024
 
-The `RealBridge` has been written against the documented `unitree_sdk2py` Python API and the published schemas in the upstream `unitree_ros2` repository. It has **not** been runtime-tested against an actual Go2.
+Note on a discrepancy: the project-level `LICENSE` is BSD 2-Clause, but
+the SPDX-License-Identifier header on individual `.py` files reads
+`BSD-3-Clause`. This appears to be an inconsistency in the upstream
+source. We've preserved both notices unchanged. When in doubt, treat
+these files as governed by the more restrictive of the two (BSD-3-Clause,
+which adds a non-endorsement clause).
 
-What's been verified:
-- Integration shape — every SDK call I make is structured against the documented surface, validated by 25 mock-based tests.
-- Wire protocol — DDS topic names (`rt/sportmodestate`, `rt/lowstate`) and message field accesses match the upstream schemas.
-- Architectural seams — `RealBridge` implements `BridgeBase` cleanly. The safety guard, cognition, and operator UI all work identically against either bridge.
-- Failure modes — calling commands before `connect()` returns False, SDK errors return False, missing SDK gives a clear actionable error.
+Files copied: `LICENSE`, `robot_commands.py`, `webrtc_topics.py`,
+`command_generator.py`, `robot_data.py`.
 
-What has NOT been verified:
-- Whether the `unitree_sdk2py` API surface I targeted matches the current upstream package. (Tested SDK methods: `ChannelFactoryInitialize`, `ChannelSubscriber.Init`, `SportClient.SetTimeout/Init/StandUp/StandDown/Move/StopMove/Damp`.)
-- The mode-code mapping (`uint8 mode` → our internal vocabulary). Specific values used: `5` = damp/estop, `7` = stand_down, `0/1` = idle/balance. Other modes fall through to "standing" or "moving" by velocity heuristic.
-- Network configuration (interface, domain ID).
-- Any of the timing/latency assumptions.
+### `go2_omniverse/`
 
-First hardware bring-up should be treated as bring-up. Expect to debug.
+- **Source:** [github.com/abizovnuralem/go2_omniverse](https://github.com/abizovnuralem/go2_omniverse)
+- **Snapshot:** master branch, 2025-02-24
+- **License:** BSD 2-Clause
+- **Copyright:** RoboVerse community, 2024
 
-That's it. No autonomy. No vision. The LLM does not act unprompted.
+Files copied: `LICENSE`, `terrain_cfg.py`, `terrain_generator_cfg.py`.
 
-## What it does *not* do yet
+### `isaac_go2_ros2/`
 
-- Talk to a real Go2.
-- See, hear, or otherwise sense the simulated world (the world has no objects in it).
-- Run any kind of behaviour tree, planner, or autonomy.
-- Persist anything across restarts.
+- **Source:** [github.com/Zhefan-Xu/isaac-go2-ros2](https://github.com/Zhefan-Xu/isaac-go2-ros2)
+  (`isaacsim-4.5` branch, per the upstream README)
+- **Snapshot:** 2025-09-23
+- **License:** BSD 2-Clause (LICENSE dated 2025-02-24, predates this
+  archive's licensing update)
+- **Copyright:** RoboVerse community, 2024
+- **Public-facing maintainer:** Zhefan Xu
 
-These are roadmap items below, not features hiding in the code.
+The `LICENSE` file dates from before this archive update. The README
+acknowledges the RL controller is based on `go2_omniverse` (also
+RoboVerse community), making the shared copyright plausible.
 
-## Quick start
+Files copied: `LICENSE`, `README.md`, `sim.yaml`, `sim_env.py`,
+`terrain_cfg.py`, `go2_ros2_bridge.py`.
 
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+### `unitree_go2_nav/`
 
-# Optional but strongly recommended:
-cp .env.example .env
-# edit .env and add ANTHROPIC_API_KEY
+- **Source:** [github.com/Sayantani-Bhattacharya/unitree_go2_nav](https://github.com/Sayantani-Bhattacharya/unitree_go2_nav)
+  (per the upstream README)
+- **Snapshot:** main branch, 2025-03-18 (source files); LICENSE added 2025-04-30
+- **License:** BSD 2-Clause (per the LICENSE.txt file)
+- **Copyright on the LICENSE file:** RoboVerse community, 2024
+- **Author stated in README:** Sayantani Bhattacharya
 
-python -m sweetie
-```
+**Provenance note:** the `LICENSE.txt` file in this project's archive
+was added on 2025-04-30 (concurrent with the second archive of these
+projects shared with this codebase) and matches the RoboVerse community
+boilerplate used by the other three projects. The upstream README, by
+contrast, names Sayantani Bhattacharya as the sole author and links to
+her personal GitHub repository, with no acknowledgment of RoboVerse
+community heritage. We've preserved the `LICENSE` as supplied;
+downstream users should make their own determination about whether the
+licensing authority is what it appears to be.
 
-Then open <http://127.0.0.1:8000>.
+Files copied: `LICENSE`, `README.md`, `nav2_params.yaml`,
+`navigation.launch.py`, `mapping.launch.py`.
 
-Click **arm**, then drag the joystick. Press **space** for E-STOP at any time.
+## How this relates to `sweetie`
 
-## Tests
-
-```bash
-pytest
-```
-
-Tests are real and they all run against the sim — there's no real-hardware path to break.
-
-## Layout
-
-```
-sweetie/
-├── core/
-│   ├── bridge.py        # SimBridge + BridgeBase. The simulator.
-│   ├── real_bridge.py   # RealBridge — wraps unitree_sdk2py. UNVERIFIED.
-│   ├── safety.py        # FSM + command guard. Single source of truth for "may I move?"
-│   └── bus.py           # Tiny async pub/sub.
-├── cognition/
-│   └── llm.py           # Anthropic client, tools, chat loop.
-├── sim/
-│   └── world.py         # Top-down world model: named objects, proximity, motion.
-└── teleop/
-    ├── server.py        # FastAPI: /ws telemetry+commands, /api/chat, /api/world, static UI.
-    └── static/          # The operator console.
-```
-
-## Roadmap
-
-These are aspirational — listed by what they unlock, not by version number.
-
-**M? — bring-up on a real Go2.** The biggest open item. `RealBridge` exists but has never been runtime-tested. The first session with hardware will need someone to: confirm the network configuration, verify the SDK API surface still matches what we wrote against, validate the mode-code mapping, and exercise each command. Tracked work, not new feature work.
-
-**M? — real perception.** `look_at_entity` returns "no_world" on real hardware because there's no perception layer. Plumbing in a vision/lidar pipeline (camera → detection → tracking → entity list) would let the existing `look_at` tool work, and would populate `recent_perceptions` from real sensor data instead of ground-truth shortcuts.
-
-**M6 — physics sim.** Optional. Either revive the MuJoCo bridge from the original wreckage or stay kinematic. Decide based on whether you actually need to test stability/tipping/recovery — kinematic sim is fine for everything else.
-
-**M? — ambient cognition.** LLM gets periodic world-state snapshots and can act on its own (not just suggest in response to prompts). The world is now dynamic, observable, *and* reactive enough that proactivity has things to react to. The most interesting variant: drive the LLM by perception events rather than on a clock. Adds real complexity (when does it run? what's the rate-limit story? cost?), so should only land when there's a clear use case.
-
-**M? — entity goals beyond reactive.** The cat just flees; the person just yields. They have no purposes — the cat doesn't go to a food bowl, the person doesn't have errands. Adding entity-level "want" (the cat wants to nap on the rug; the person wants to reach the kitchen and back) would make the simulation feel less scripted. Easy to add but unclear value.
-
-## License
-
-MIT. Do whatever.
+See `docs/go2-references.md` in the repository root for cross-references:
+which constants we actually use, where the upstream values disagree
+with what we wrote in `sweetie/core/real_bridge.py`, and which transport
+(native CycloneDDS vs WebRTC) each set of topic names applies to.
