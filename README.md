@@ -8,7 +8,7 @@ actual robot.
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](#license)
-[![Tests: 285](https://img.shields.io/badge/tests-285%20passing-brightgreen.svg)](#tests)
+[![Tests: 298](https://img.shields.io/badge/tests-298%20passing-brightgreen.svg)](#tests)
 [![Status: sim-only](https://img.shields.io/badge/status-sim%20only-yellow.svg)](#hardware-integration-status)
 
 ---
@@ -194,24 +194,40 @@ What's verified by tests:
 - Architectural seams: `RealBridge` implements `BridgeBase` cleanly;
   safety guard, cognition, and operator UI work identically against
   either bridge
+- `RealPerception` generates proximity-quadrant transition events from
+  the live `range_obstacle` field with hysteresis; same event shape
+  the cognition layer sees from `SimPerception`
 - Failure modes: commands before `connect()` return False, SDK errors
   return False, missing SDK gives a clear actionable error
 
-What is NOT verified:
+What is NOT verified, and what's deliberately not yet implemented:
 
 - Whether the upstream `unitree_sdk2py` API surface still matches what
   we wrote against
 - The mode-code mapping (`uint8 mode` → our internal vocabulary)
 - Network configuration (interface, domain ID)
 - Timing/latency assumptions
-- Real-hardware navigation: `go_to_pose` is **deliberately refused** on
-  `RealBridge` — there's no perception or planner on hardware yet, so
-  driving blindly toward a coordinate would be unsafe
+- Real-hardware navigation: `go_to_pose` and `follow_path` are
+  **deliberately refused** on `RealBridge` — there's no perception or
+  planner on hardware yet, so driving blindly toward a coordinate
+  would be unsafe
+- Audio hub TTS: the `speak_through_robot` seam exists on `RealBridge`
+  but the audio block encoding is unimplemented (needs an external
+  TTS engine + chunked SEND_AUDIO_BLOCK sequencing). `speak` falls
+  back to the chat panel cleanly.
+- Camera frames + semantic detection: `RealPerception.vision_summary()`
+  returns `[]` honestly; an on-board model or external service would
+  fill that in.
 
-First hardware bring-up should be treated as bring-up. Expect to debug.
-The cross-reference doc at [`docs/go2-references.md`](docs/go2-references.md)
-maps our integration against four other open-source Go2 projects
-(BSD-2-Clause); start there. There's also a read-only diagnostic tool:
+First hardware bring-up should be treated as bring-up. The full
+procedure is documented in
+[`docs/hardware-bringup.md`](docs/hardware-bringup.md), with explicit
+guidance to revise the doc from experience as you go. The cross-reference
+at [`docs/go2-references.md`](docs/go2-references.md) maps our
+integration against four other open-source Go2 projects (BSD-2-Clause)
+for second opinions.
+
+There's also a read-only diagnostic tool:
 
 ```bash
 python -m sweetie.tools.preflight --interface eth0 --domain 0
@@ -228,7 +244,7 @@ issue motion commands. Exit code 0 = all checks passed.
 pytest
 ```
 
-285 tests, all passing as of this README. Coverage includes:
+298 tests, all passing as of this README. Coverage includes:
 
 - Safety FSM transitions, predicate ticks, proximity-aware scaling,
   battery-low and tilt auto-trip
@@ -237,10 +253,12 @@ pytest
   navigation, waypoint queues
 - World: lookups, geometry, categories, velocity, motion classification,
   reactive flee/yield, scene registry, regions, procedural obstacle fields
-- Perception: quadrant transitions, FOV cone, occlusion, vision events
+- SimPerception: quadrant transitions, FOV cone, occlusion, vision events
+- RealPerception: hysteresis, near/far thresholds, per-quadrant
+  independence, drain semantics, empty vision summary
 - Cognition: tool dispatch, safety integration, look_at outcomes,
   report_status structure, scene-aware system prompt, sliding-window
-  history trimming
+  history trimming, speak-through-bridge wiring
 - Real bridge: 25 mock-based tests against the documented SDK surface
 - Preflight diagnostic: SDK init, DDS connect, topic publishing, schema
   validation, mode-code observation
@@ -251,24 +269,27 @@ pytest
 ```
 sweetie/
 ├── core/
-│   ├── bridge.py        # SimBridge + BridgeBase. The simulator.
-│   ├── real_bridge.py   # RealBridge — wraps unitree_sdk2py. UNVERIFIED.
-│   ├── safety.py        # FSM + command guard. Single source of truth.
-│   └── bus.py           # Tiny async pub/sub.
+│   ├── bridge.py            # SimBridge + BridgeBase. The simulator.
+│   ├── real_bridge.py       # RealBridge — wraps unitree_sdk2py. UNVERIFIED.
+│   ├── perception.py        # PerceptionBase — hardware-neutral interface.
+│   ├── real_perception.py   # RealPerception — proximity events from LowState.
+│   ├── safety.py            # FSM + command guard. Single source of truth.
+│   └── bus.py               # Tiny async pub/sub.
 ├── cognition/
-│   ├── llm.py           # Anthropic client, tools, chat loop, ambient_react.
-│   └── ambient.py       # Bus-event-driven unprompted commentary (opt-in).
+│   ├── llm.py               # Anthropic client, tools, chat loop, ambient_react.
+│   └── ambient.py           # Bus-event-driven unprompted commentary (opt-in).
 ├── sim/
-│   ├── world.py         # Named objects + regions + scene registry (8 scenes).
-│   └── perception.py    # SimPerception: quadrants + vision FOV + occlusion.
+│   ├── world.py             # Named objects + regions + scene registry (8 scenes).
+│   └── perception.py        # SimPerception: quadrants + vision FOV + occlusion.
 ├── teleop/
-│   ├── server.py        # FastAPI: /ws + /api/chat + /api/world + static UI.
-│   └── static/          # The operator console (HTML + CSS + vanilla JS).
+│   ├── server.py            # FastAPI: /ws + /api/chat + /api/world + static UI.
+│   └── static/              # The operator console (HTML + CSS + vanilla JS).
 └── tools/
-    └── preflight.py     # Read-only hardware bring-up diagnostic.
+    └── preflight.py         # Read-only hardware bring-up diagnostic.
 
 docs/
-└── go2-references.md    # Cross-reference vs upstream Go2 projects.
+├── go2-references.md        # Cross-reference vs upstream Go2 projects.
+└── hardware-bringup.md      # Step-by-step first-Go2 procedure (speculative).
 
 third_party/
 ├── go2_ros2_sdk/        # BSD-2 reference: WebRTC SDK, sport mode IDs.

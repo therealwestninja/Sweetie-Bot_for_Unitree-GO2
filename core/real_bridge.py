@@ -53,6 +53,7 @@ from sweetie.core.bridge import (
     VY_LIMIT,
     VYAW_LIMIT,
 )
+from sweetie.core.bus import bus
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +151,14 @@ class RealBridge(BridgeBase):
         self._state.mode = "down"  # safe assumption at startup
         self._state_lock = threading.Lock()
 
+        # Perception layer: derived from range_obstacle over time.
+        # See `core/real_perception.py` for what it does and doesn't.
+        from sweetie.core.real_perception import RealPerception
+        self._perception = RealPerception()
+        # Background task: feeds the perception layer with each LowState
+        # update. Started in connect(), cancelled in disconnect().
+        self._perception_task: asyncio.Task | None = None
+
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
     async def connect(self) -> None:
@@ -175,6 +184,10 @@ class RealBridge(BridgeBase):
         self._sport.Init()
 
         self._connected = True
+        # Start the perception forwarder. Reads cached state under lock,
+        # drives `RealPerception`, publishes new events to the bus —
+        # same shape SimBridge does in its tick loop.
+        self._perception_task = asyncio.create_task(self._perception_loop())
         logger.info(
             "RealBridge connected on %s (DDS domain=%d)",
             self._network_interface, self._domain_id,
@@ -185,10 +198,45 @@ class RealBridge(BridgeBase):
         # ChannelFactory — it tears down at process exit. Here we just
         # mark ourselves closed and drop our handles.
         self._connected = False
+        if self._perception_task is not None:
+            self._perception_task.cancel()
+            try:
+                await self._perception_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._perception_task = None
         self._sport_state_sub = None
         self._low_state_sub = None
         self._sport = None
         logger.info("RealBridge disconnected")
+
+    # ── Perception loop ─────────────────────────────────────────────────────
+
+    PERCEPTION_HZ = 10  # 10 Hz is plenty for transition events.
+
+    async def _perception_loop(self) -> None:
+        """Drive `RealPerception` from cached telemetry at `PERCEPTION_HZ`.
+
+        Runs in the asyncio loop (not the SDK thread). Reads `range_obstacle`
+        from the cached state under lock, ticks perception, drains and
+        publishes new events. Mirrors `SimBridge._tick_loop`'s perception
+        forwarding so cognition / ambient / UI all consume the same shape.
+        """
+        dt = 1.0 / self.PERCEPTION_HZ
+        while self._connected:
+            try:
+                await asyncio.sleep(dt)
+                with self._state_lock:
+                    s = self._state
+                    x, y, yaw = s.x, s.y, s.yaw
+                    ro = tuple(s.range_obstacle)
+                self._perception.tick(x, y, yaw, ro)
+                for event in self._perception.drain_new_events():
+                    await bus.publish("perception", {"event": event})
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("RealBridge perception loop error")
 
     # ── DDS callbacks (run on SDK thread) ───────────────────────────────────
 
@@ -299,6 +347,96 @@ class RealBridge(BridgeBase):
         # Same response shape as SimBridge.look_at_entity when no world
         # is attached. Real-hardware perception is a separate milestone.
         return "no_world"
+
+    async def set_body_height(self, meters: float) -> bool:
+        """Crouch/stand by calling SportClient.BodyHeight.
+
+        The SDK's `BodyHeight` takes a *relative* offset from the default
+        standing height (~0.27 m), in meters, in roughly ±0.10 m.
+        We accept absolute heights from the operator/LLM and convert.
+        Range clamped to [BODY_HEIGHT_MIN, BODY_HEIGHT_MAX].
+        """
+        if self._sport is None:
+            return False
+        from sweetie.core.bridge import (
+            BODY_HEIGHT_DEFAULT, BODY_HEIGHT_MIN, BODY_HEIGHT_MAX,
+        )
+        clamped = max(BODY_HEIGHT_MIN, min(BODY_HEIGHT_MAX, float(meters)))
+        offset = clamped - BODY_HEIGHT_DEFAULT
+        ok = await self._sdk_call(self._sport.BodyHeight, offset)
+        if ok:
+            with self._state_lock:
+                self._state.body_height = clamped
+        return ok
+
+    async def go_to_pose(self, x: float, y: float) -> bool:
+        # Real-hardware navigation needs a planner + obstacle awareness
+        # we don't have on the wire yet (perception is unimplemented;
+        # path-planning is M? Nav2). Calling this on real hardware would
+        # be unsafe, so we refuse explicitly rather than silently doing
+        # nothing. A future M? Nav2 layer implements this properly.
+        logger.warning(
+            "RealBridge.go_to_pose(%.2f, %.2f) refused — no navigation "
+            "stack on real hardware yet.", x, y,
+        )
+        return False
+
+    async def follow_path(self, waypoints: list[tuple[float, float]]) -> bool:
+        # Same reasoning as go_to_pose — refuse explicitly on real
+        # hardware until perception + planner exist. A real Nav2
+        # integration would queue the points; we have none of that yet.
+        logger.warning(
+            "RealBridge.follow_path(%d waypoints) refused — no navigation "
+            "stack on real hardware yet.", len(waypoints),
+        )
+        return False
+
+    # ── Perception delegation ──────────────────────────────────────────────
+
+    def recent_perceptions(self, window_s: float = 30.0) -> list[dict]:
+        """Return perception events from the last `window_s` seconds."""
+        return self._perception.recent_events(window_s=window_s)
+
+    def vision_summary(self) -> list[dict]:
+        """Currently always [] on real hardware (no semantic detector wired)."""
+        with self._state_lock:
+            x, y, yaw = self._state.x, self._state.y, self._state.yaw
+        return self._perception.vision_summary(x, y, yaw)
+
+    def current_region(self) -> str | None:
+        """No region tracking on real hardware (no world model)."""
+        return None
+
+    # ── Audio hub ──────────────────────────────────────────────────────────
+
+    async def speak_through_robot(self, text: str) -> bool:
+        """Push TTS audio through the Go2's audio hub.
+
+        UNIMPLEMENTED — the audio hub API (`AUDIO_HUB_COMMANDS` from
+        upstream go2_ros2_sdk: START_AUDIO=4001, SEND_AUDIO_BLOCK=4003,
+        STOP_AUDIO=4002) takes raw audio blocks, not text. A complete
+        implementation needs:
+
+          1. An external TTS engine to synthesize `text` to PCM audio
+             (espeak / festival / pyttsx3 for offline; or a cloud API).
+          2. Block-chunking the PCM into the format AUDIO_HUB expects
+             (sample rate / encoding / chunk size — not documented in
+             the BSD-2 references; needs hardware to verify).
+          3. Sequenced START_AUDIO → SEND_AUDIO_BLOCK* → STOP_AUDIO.
+
+        Until this lands, we log the attempt and return False so the
+        cognition layer's `speak` tool can fall back to the chat
+        broadcast cleanly. Architectural seam is in place — the day
+        someone has a Go2 to test against, only this method changes.
+
+        See `third_party/go2_ros2_sdk/webrtc_topics.py` for the
+        AUDIO_HUB_COMMANDS source.
+        """
+        logger.info(
+            "speak_through_robot(%r) — not implemented yet on real hardware "
+            "(needs external TTS engine + audio block encoding)", text,
+        )
+        return False
 
     # ── Internals ───────────────────────────────────────────────────────────
 
