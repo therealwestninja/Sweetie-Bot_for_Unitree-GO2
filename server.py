@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -25,7 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from sweetie.cognition.llm import Cognition
-from sweetie.core.bridge import SimBridge
+from sweetie.core.bridge import BridgeBase, SimBridge
 from sweetie.core.bus import bus
 from sweetie.core.safety import SafetyGuard
 from sweetie.sim.world import World, default_scene
@@ -39,9 +40,42 @@ logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
 TELEMETRY_HZ = 20
 
+
+def _make_bridge() -> tuple[BridgeBase, World | None]:
+    """
+    Pick the bridge implementation based on `SWEETIE_BRIDGE`.
+
+    `sim` (default): kinematic simulator with the M5 default scene.
+    `real`: connects to a real Go2 over DDS via unitree_sdk2py. Network
+            interface is read from `SWEETIE_NETWORK_INTERFACE` (default
+            'eth0'); DDS domain from `SWEETIE_DDS_DOMAIN` (default 0).
+
+    Real hardware has no simulated world — the returned `world` is None,
+    and the UI map will simply have no obstacles to draw.
+    """
+    kind = os.getenv("SWEETIE_BRIDGE", "sim").lower()
+    if kind == "real":
+        # Imported lazily so the simulator code path doesn't require
+        # unitree_sdk2py to be installed.
+        from sweetie.core.real_bridge import RealBridge
+        interface = os.getenv("SWEETIE_NETWORK_INTERFACE")
+        domain = int(os.getenv("SWEETIE_DDS_DOMAIN", "0"))
+        logger.warning(
+            "Using RealBridge (interface=%s, domain=%d). "
+            "This integration is UNVERIFIED on real hardware — proceed with care.",
+            interface or "eth0", domain,
+        )
+        return RealBridge(network_interface=interface, domain_id=domain), None
+
+    if kind != "sim":
+        logger.warning("Unknown SWEETIE_BRIDGE=%r, defaulting to 'sim'", kind)
+    logger.info("Using SimBridge with default scene")
+    w = default_scene()
+    return SimBridge(world=w), w
+
+
 # ── Process-wide singletons ──────────────────────────────────────────────────
-world: World = default_scene()
-bridge = SimBridge(world=world)
+bridge, world = _make_bridge()
 safety = SafetyGuard()
 cog = Cognition(bridge=bridge, safety=safety)
 
@@ -118,7 +152,13 @@ async def chat(msg: ChatIn) -> ChatOut:
 
 @app.get("/api/world")
 async def get_world() -> dict:
-    """Static snapshot of the world for the UI map. Fetched once on connect."""
+    """Static snapshot of the world for the UI map. Fetched once on connect.
+
+    Returns an empty object list when no simulated world exists (i.e. real
+    hardware mode). The UI handles this by simply rendering no obstacles.
+    """
+    if world is None:
+        return {"objects": []}
     return world.to_dict()
 
 
@@ -226,11 +266,16 @@ async def _telemetry_loop() -> None:
             await asyncio.sleep(period)
             state = await bridge.get_state()
             # Just the moving entities — static furniture was sent once via /api/world.
-            dynamic = [
-                {"name": o.name, "x": round(o.x, 3), "y": round(o.y, 3)}
-                for o in world.objects
-                if o.dynamic
-            ]
+            # On real hardware (world is None) there are no simulated entities.
+            dynamic = (
+                [
+                    {"name": o.name, "x": round(o.x, 3), "y": round(o.y, 3)}
+                    for o in world.objects
+                    if o.dynamic
+                ]
+                if world is not None
+                else []
+            )
             await _broadcast(
                 {
                     "type": "telemetry",

@@ -5,15 +5,34 @@ Hybrid control: deterministic safety FSM, LLM for high-level chat/intent.
 
 ## What this actually does, today
 
-Milestones shipped: **M1, M2, M3, M4, M5, M?-scene**.
+Milestones shipped: **M1, M2, M3, M4, M5, M?-scene, M7**.
 
 - Behavioural simulator (`SimBridge`) that integrates commanded velocity into pose at 50 Hz, populates proximity readings (front/left/back/right) from a small fake world, ticks moving entities, supports closed-loop yaw goals for "look at this thing", and tracks per-entity quadrant transitions for perception events.
 - Safety FSM (`SafetyGuard`) that gates every motion command and every action intent. States: `IDLE → ARMED → ACTIVE → ESTOP`. The guard also applies proximity-aware velocity scaling — operator joystick commands toward an obstacle are linearly slowed between 1.0 m and 0.3 m clearance, and zeroed below the hard floor. Driving away is always full-speed.
-- Web operator console: drag joystick to drive, ARM/DISARM/STAND/SIT buttons, latching E-STOP, telemetry strip, and a top-down world map showing the room and the robot's pose live. Static furniture is fetched once on connect; dynamic entities (the cat, the person) are repositioned on every telemetry frame and outlined in blue. Smart-assist interventions show up as ⚠ amber chat lines.
+- Web operator console: drag joystick to drive, ARM/DISARM/STAND/SIT buttons, latching E-STOP, telemetry strip, and a top-down world map showing the room and the robot's pose live. Smart-assist interventions show up as ⚠ amber chat lines.
 - Reactive LLM cognition: chat with Claude in the side panel. Six tools — `speak`, `stand_up`, `sit_down`, `halt`, `look_at`, `report_status` — all flowing through the same `SafetyGuard` the joystick does. `report_status` exposes proximity, recent assists, *and* — for each nearby object — its category and current motion (approaching/receding/stationary), plus a `recent_perceptions` log of meaningful transitions.
-- A small fake world (`sim/world.py`) with five static objects and two moving ones — a `Wanderer` cat that random-walks within 0.8 m of its home, and a `PathWalker` person who walks a counter-clockwise loop of seven waypoints around the apartment. Each object carries a category (`furniture`, `animal`, `person`, `fixture`, `decor`). The robot's `range_obstacle[4]` matches the schema the real Go2 publishes.
+- A small fake world (`sim/world.py`) with five static objects and two moving ones — a `Wanderer` cat and a `PathWalker` person. Each object carries a category. The robot's `range_obstacle[4]` matches the schema the real Go2 publishes.
+- A `RealBridge` (`core/real_bridge.py`) for connecting to an actual Unitree Go2 over DDS via `unitree_sdk2py`. **This integration is unverified on hardware — see the warning below.** Selectable at startup via `SWEETIE_BRIDGE=real`.
 
-That's it. No autonomy. No vision. No real hardware path. The LLM does not act unprompted.
+## Hardware integration status
+
+The `RealBridge` has been written against the documented `unitree_sdk2py` Python API and the published schemas in the upstream `unitree_ros2` repository. It has **not** been runtime-tested against an actual Go2.
+
+What's been verified:
+- Integration shape — every SDK call I make is structured against the documented surface, validated by 25 mock-based tests.
+- Wire protocol — DDS topic names (`rt/sportmodestate`, `rt/lowstate`) and message field accesses match the upstream schemas.
+- Architectural seams — `RealBridge` implements `BridgeBase` cleanly. The safety guard, cognition, and operator UI all work identically against either bridge.
+- Failure modes — calling commands before `connect()` returns False, SDK errors return False, missing SDK gives a clear actionable error.
+
+What has NOT been verified:
+- Whether the `unitree_sdk2py` API surface I targeted matches the current upstream package. (Tested SDK methods: `ChannelFactoryInitialize`, `ChannelSubscriber.Init`, `SportClient.SetTimeout/Init/StandUp/StandDown/Move/StopMove/Damp`.)
+- The mode-code mapping (`uint8 mode` → our internal vocabulary). Specific values used: `5` = damp/estop, `7` = stand_down, `0/1` = idle/balance. Other modes fall through to "standing" or "moving" by velocity heuristic.
+- Network configuration (interface, domain ID).
+- Any of the timing/latency assumptions.
+
+First hardware bring-up should be treated as bring-up. Expect to debug.
+
+That's it. No autonomy. No vision. The LLM does not act unprompted.
 
 ## What it does *not* do yet
 
@@ -54,29 +73,32 @@ Tests are real and they all run against the sim — there's no real-hardware pat
 ```
 sweetie/
 ├── core/
-│   ├── bridge.py     # SimBridge + BridgeBase. Swap in RealBridge later, here.
-│   ├── safety.py     # FSM + command guard. Single source of truth for "may I move?"
-│   └── bus.py        # Tiny async pub/sub.
+│   ├── bridge.py        # SimBridge + BridgeBase. The simulator.
+│   ├── real_bridge.py   # RealBridge — wraps unitree_sdk2py. UNVERIFIED.
+│   ├── safety.py        # FSM + command guard. Single source of truth for "may I move?"
+│   └── bus.py           # Tiny async pub/sub.
 ├── cognition/
-│   └── llm.py        # Anthropic client, tools, chat loop.
+│   └── llm.py           # Anthropic client, tools, chat loop.
 ├── sim/
-│   └── world.py      # Top-down world model: named objects, proximity queries.
+│   └── world.py         # Top-down world model: named objects, proximity, motion.
 └── teleop/
-    ├── server.py     # FastAPI: /ws telemetry+commands, /api/chat, /api/world, static UI.
-    └── static/       # The operator console (now with a top-down map).
+    ├── server.py        # FastAPI: /ws telemetry+commands, /api/chat, /api/world, static UI.
+    └── static/          # The operator console.
 ```
 
 ## Roadmap
 
 These are aspirational — listed by what they unlock, not by version number.
 
-**M6 — physics sim.** Either revive the MuJoCo bridge from the original wreckage (after verifying it actually runs) or stay kinematic. Decide based on whether physics matters for what you want to test next. The simulator we have works fine for testing motion control, smart-assist, and scene awareness; physics matters more if you want to test stability, tipping, and recovery behaviors.
+**M? — bring-up on a real Go2.** The biggest open item. `RealBridge` exists but has never been runtime-tested. The first session with hardware will need someone to: confirm the network configuration, verify the SDK API surface still matches what we wrote against, validate the mode-code mapping, and exercise each command. Tracked work, not new feature work.
 
-**M7 — real hardware.** Drop in a `RealBridge` that wraps `unitree_sdk2py`. The seam is already in place — `BridgeBase` is the only thing the rest of the codebase knows about, and our `range_obstacle[4]` and command shapes already mirror what the Go2 publishes. The `recent_perceptions` would be replaced by a real vision/lidar pipeline.
+**M? — real perception.** `look_at_entity` returns "no_world" on real hardware because there's no perception layer. Plumbing in a vision/lidar pipeline (camera → detection → tracking → entity list) would let the existing `look_at` tool work, and would populate `recent_perceptions` from real sensor data instead of ground-truth shortcuts.
 
-**M? — ambient cognition.** LLM gets periodic world-state snapshots and can act on its own (not just suggest in response to prompts). Adds real complexity (when does it run? what's the rate-limit story? cost?). The world is now dynamic and observable enough that proactivity has things to react to — but be honest about whether it's actually useful before building it. The most interesting variant: drive the LLM by perception events (entity entered front quadrant) rather than on a clock.
+**M6 — physics sim.** Optional. Either revive the MuJoCo bridge from the original wreckage or stay kinematic. Decide based on whether you actually need to test stability/tipping/recovery — kinematic sim is fine for everything else.
 
-**M? — reactive entities.** Right now entities move along their own patterns regardless of the robot. Making the cat dart away when the robot gets close, or the person look up when called, would give the world a sense of being inhabited rather than scripted. Crosses into "entities have goals" territory.
+**M? — ambient cognition.** LLM gets periodic world-state snapshots and can act on its own (not just suggest in response to prompts). Adds real complexity (when does it run? what's the rate-limit story? cost?). The world is now dynamic and observable enough that proactivity has things to react to. The most interesting variant: drive the LLM by perception events rather than on a clock.
+
+**M? — reactive entities.** Right now entities move along their own patterns regardless of the robot. Making the cat dart away when the robot gets close, or the person look up when called, would give the world a sense of being inhabited. Crosses into "entities have goals" territory.
 
 ## License
 

@@ -19,6 +19,13 @@ dev = [
     "pytest-asyncio>=0.23",
     "httpx>=0.27",
 ]
+# Optional: only needed when SWEETIE_BRIDGE=real. Pulls in the upstream
+# Unitree SDK. If pip can't find unitree_sdk2py on PyPI in your region,
+# install from GitHub directly:
+#   pip install git+https://github.com/unitreerobotics/unitree_sdk2_python
+real = [
+    "unitree_sdk2py",
+]
 
 [project.scripts]
 sweetie = "sweetie.main:run"
