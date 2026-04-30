@@ -54,6 +54,32 @@ class Observer:
     yaw: float = 0.0
 
 
+@dataclass(frozen=True)
+class Region:
+    """
+    A named axis-aligned bounding box on the world's xy plane.
+
+    Regions are used for zone-aware behavior — the bridge can detect
+    when the robot crosses from one region to another and emit an event.
+    They're also a natural way to give the LLM spatial context ("you're
+    in the apartment area" vs "you're in the street").
+
+    Regions don't enforce anything — they're just labelled bounding
+    boxes. They never block motion. Multiple regions may overlap; the
+    first match in `World.regions` wins for `region_at()`.
+    """
+
+    name: str
+    x_min: float
+    x_max: float
+    y_min: float
+    y_max: float
+    description: str = ""
+
+    def contains(self, x: float, y: float) -> bool:
+        return self.x_min <= x <= self.x_max and self.y_min <= y <= self.y_max
+
+
 @dataclass
 class WorldObject:
     """A named thing in the world. Position is the center of its bounding circle."""
@@ -64,9 +90,16 @@ class WorldObject:
     radius: float = 0.3
     description: str = ""
     # Loose grouping the LLM can reason about: 'furniture', 'animal',
-    # 'person', 'fixture', 'decor', 'object'. Free-form; not enum'd because
-    # we want to grow the vocabulary without ceremony.
+    # 'person', 'fixture', 'decor', 'object', 'prop', 'vehicle',
+    # 'infrastructure', 'cone', 'barrier', 'stairs', 'terrain'.
+    # Free-form; not enum'd because we want to grow the vocabulary
+    # without ceremony.
     category: str = "object"
+    # Whether this object physically blocks the robot. False for terrain
+    # features (slopes, hills, moguls) that the robot can drive over even
+    # though they're spatially extended. M4 proximity scaling and
+    # range_obstacle ignore non-obstacles.
+    obstacle: bool = True
 
     # Class-level flag so `World` can pick out entities that need ticking.
     # Subclasses override this to True. Using a ClassVar keeps it out of
@@ -96,6 +129,7 @@ class WorldObject:
             "radius": self.radius,
             "description": self.description,
             "category": self.category,
+            "obstacle": self.obstacle,
             "dynamic": self.dynamic,
         }
 
@@ -263,6 +297,11 @@ class World:
     """A flat collection of WorldObjects with spatial query helpers."""
 
     objects: list[WorldObject] = field(default_factory=list)
+    # Named bounding boxes laid over the xy plane. Used for zone-aware
+    # context ("you're in the apartment") and zone-transition events
+    # that ambient cognition can react to. Defaults to no regions —
+    # focused practice scenes that span a single area don't need them.
+    regions: list[Region] = field(default_factory=list)
 
     # ── lookup ──────────────────────────────────────────────────────────────
 
@@ -279,6 +318,13 @@ class World:
 
     def names(self) -> list[str]:
         return [o.name for o in self.objects]
+
+    def region_at(self, x: float, y: float) -> Region | None:
+        """First region containing (x, y), or None. List order is precedence."""
+        for r in self.regions:
+            if r.contains(x, y):
+                return r
+        return None
 
     # ── geometry ────────────────────────────────────────────────────────────
 
@@ -303,6 +349,8 @@ class World:
         ranges = [max_range] * 4
         cy, sy = math.cos(-yaw), math.sin(-yaw)
         for obj in self.objects:
+            if not obj.obstacle:
+                continue
             dx = obj.x - x
             dy = obj.y - y
             # Transform world-frame delta into robot frame.
@@ -410,67 +458,314 @@ class World:
         )
 
 
-def default_scene() -> World:
+# ── Scene builders ──────────────────────────────────────────────────────────
+#
+# Each region of the studio backlot is built by its own private function
+# so individual practice scenes can pick and choose. The combined
+# `studio_scene()` is what the M? scene-expansion milestone shipped; the
+# split into apartment / street / stairs / agility lets an operator
+# focus on one practice area at a time without the visual clutter of the
+# others. Pattern borrowed from `isaac_go2_ros2/sim_env.py` (BSD-2,
+# RoboVerse community 2024) — see `third_party/isaac_go2_ros2/sim_env.py`
+# and `docs/go2-references.md`.
+
+
+def _apartment_objects() -> list[WorldObject]:
+    """Couch / table / kitchen / door / rug, plus the cat and the person.
+
+    The reactive entities live here because their waypoints reference
+    apartment furniture coordinates. Picking a non-apartment scene
+    means a static-only world.
     """
-    A small domestic-ish room. Everything is roughly within a 4 x 4 m area
-    centered on the robot's start position (0, 0, yaw=0 = facing +x).
+    return [
+        WorldObject("couch", x=2.0, y=1.5, radius=0.6,
+                    category="furniture",
+                    description="a long soft couch along the wall"),
+        WorldObject("coffee table", x=1.2, y=0.0, radius=0.4,
+                    category="furniture",
+                    description="a low wooden coffee table"),
+        WorldObject("kitchen counter", x=-1.5, y=2.5, radius=0.7,
+                    category="furniture",
+                    description="the kitchen counter, with the sink"),
+        WorldObject("door", x=-2.5, y=0.0, radius=0.2,
+                    category="fixture",
+                    description="the doorway out to the hallway"),
+        WorldObject("rug", x=1.0, y=0.5, radius=0.0,
+                    category="decor",
+                    description="a patterned rug; not an obstacle"),
+        Wanderer(
+            name="cat",
+            x=0.5, y=-1.5, radius=0.15,
+            category="animal",
+            description="a small black cat, currently wandering",
+            speed=0.15, roam_radius=0.8,
+            flee_distance=0.6, flee_speed_multiplier=2.5,
+        ),
+        PathWalker(
+            name="person",
+            x=-2.0, y=1.5, radius=0.25,
+            category="person",
+            description="a person walking around the apartment",
+            speed=0.4, yield_distance=1.0,
+            waypoints=[
+                (-2.0,  1.5), (-0.5,  2.3), ( 1.5,  2.3),
+                ( 2.5,  0.5), ( 2.0, -1.5), (-1.0, -2.0),
+                (-2.3,  0.0),
+            ],
+        ),
+    ]
 
-    Coordinate conventions: +x is "in front", +y is "to the left" of the
-    robot's starting orientation. (Standard right-hand rule, z-up.)
 
-    Static furniture (couch, coffee table, kitchen counter, door, rug),
-    plus two moving entities — a Wanderer cat and a PathWalker person.
+def _street_objects() -> list[WorldObject]:
+    """Road, parked car, sidewalk furniture, traffic cones, fence line."""
+    return [
+        WorldObject("road", x=6.0, y=0.0, radius=0.0,
+                    category="terrain", obstacle=False,
+                    description="a paved 2-lane road running roughly N-S"),
+        WorldObject("car", x=6.0, y=-1.0, radius=0.9,
+                    category="vehicle",
+                    description="a parked sedan along the curb"),
+        WorldObject("lamp post", x=4.5, y=2.5, radius=0.05,
+                    category="infrastructure",
+                    description="a tall street lamp post"),
+        WorldObject("fire hydrant", x=4.5, y=-2.5, radius=0.15,
+                    category="infrastructure",
+                    description="a red fire hydrant on the sidewalk"),
+        # Sidewalk curbs — 4 small posts approximating the curb edge.
+        WorldObject("curb (north end)",     x=5.0, y=2.0, radius=0.08,
+                    category="infrastructure",
+                    description="raised concrete curb edge"),
+        WorldObject("curb (mid-north)",     x=5.0, y=0.5, radius=0.08,
+                    category="infrastructure",
+                    description="raised concrete curb edge"),
+        WorldObject("curb (mid-south)",     x=5.0, y=-1.0, radius=0.08,
+                    category="infrastructure",
+                    description="raised concrete curb edge"),
+        WorldObject("curb (south end)",     x=5.0, y=-2.5, radius=0.08,
+                    category="infrastructure",
+                    description="raised concrete curb edge"),
+        # Traffic cones in a coning-off pattern.
+        WorldObject("traffic cone NW", x=5.5, y=1.5, radius=0.15,
+                    category="cone",
+                    description="orange traffic cone"),
+        WorldObject("traffic cone NE", x=6.5, y=1.5, radius=0.15,
+                    category="cone",
+                    description="orange traffic cone"),
+        WorldObject("traffic cone SW", x=5.5, y=-1.8, radius=0.15,
+                    category="cone",
+                    description="orange traffic cone"),
+        WorldObject("traffic cone SE", x=6.5, y=-1.8, radius=0.15,
+                    category="cone",
+                    description="orange traffic cone"),
+        # Fence line on the sidewalk side.
+        WorldObject("fence post 1", x=4.0, y=-2.0, radius=0.05,
+                    category="barrier",
+                    description="part of a chain-link fence line"),
+        WorldObject("fence post 2", x=4.0, y=-0.7, radius=0.05,
+                    category="barrier",
+                    description="part of a chain-link fence line"),
+        WorldObject("fence post 3", x=4.0, y=0.7, radius=0.05,
+                    category="barrier",
+                    description="part of a chain-link fence line"),
+        WorldObject("fence post 4", x=4.0, y=2.0, radius=0.05,
+                    category="barrier",
+                    description="part of a chain-link fence line"),
+    ]
+
+
+def _stairs_objects() -> list[WorldObject]:
+    """Straight stair runs (2/3/5/8 steps) plus the L-bend.
+
+    Note: our kinematic sim has no Z axis — stairs are represented
+    spatially and the LLM can talk about them, but the robot doesn't
+    actually traverse them. Real stairs traversal is an M6 (physics)
+    concern. They're marked as obstacles so the safety guard treats
+    them as something to approach carefully.
+    """
+    return [
+        WorldObject("stairs (2-step run)", x=-3.0, y=5.0, radius=0.6,
+                    category="stairs",
+                    description="a 2-step run going up to the north"),
+        WorldObject("stairs (3-step run)", x=-1.0, y=5.0, radius=0.7,
+                    category="stairs",
+                    description="a 3-step run going up to the north"),
+        WorldObject("stairs (5-step run)", x=1.0, y=5.0, radius=0.9,
+                    category="stairs",
+                    description="a 5-step run going up to the north"),
+        WorldObject("stairs (8-step run)", x=3.0, y=5.0, radius=1.2,
+                    category="stairs",
+                    description="an 8-step run going up to the north"),
+        # L-bend stairs: 2 steps up, 90° right turn platform, then 8 more.
+        WorldObject("L-bend stairs (lower)", x=-3.0, y=7.5, radius=0.5,
+                    category="stairs",
+                    description="2 steps up, leading to a turn platform"),
+        WorldObject("L-bend stairs (platform)", x=-2.5, y=8.0, radius=0.4,
+                    category="stairs",
+                    description="90-degree right-turn platform between stair runs"),
+        WorldObject("L-bend stairs (upper)", x=-1.0, y=8.5, radius=1.0,
+                    category="stairs",
+                    description="8 steps continuing east from the turn platform"),
+    ]
+
+
+def _agility_objects() -> list[WorldObject]:
+    """Apple boxes (props) plus passable terrain (slope, hill, moguls, gravel)."""
+    return [
+        # Apple boxes — standard film-industry sizes.
+        WorldObject("apple box (full)", x=-4.5, y=-3.5, radius=0.18,
+                    category="prop",
+                    description="full apple box, ~20 inches tall"),
+        WorldObject("apple box (half)", x=-4.5, y=-4.0, radius=0.18,
+                    category="prop",
+                    description="half apple box, ~10 inches tall"),
+        WorldObject("apple box (quarter / pancake)", x=-5.0, y=-3.5, radius=0.16,
+                    category="prop",
+                    description="quarter apple box, aka pancake, ~5 inches tall"),
+        WorldObject("apple box (eighth)", x=-5.0, y=-4.0, radius=0.15,
+                    category="prop",
+                    description="eighth apple box, ~2.5 inches tall"),
+        # Terrain — passable; doesn't block proximity scaling in our sim.
+        WorldObject("gentle slope", x=-6.5, y=-4.5, radius=1.2,
+                    category="terrain", obstacle=False,
+                    description="a gentle slope, maybe 10 degrees, leading up to the hill"),
+        WorldObject("hill", x=-7.5, y=-6.5, radius=1.5,
+                    category="terrain", obstacle=False,
+                    description="a small grassy hill, peaks ~0.5 m above flat ground"),
+        WorldObject("moguls", x=-3.5, y=-6.0, radius=1.3,
+                    category="terrain", obstacle=False,
+                    description="a patch of small bumps, like ski moguls — challenging footing"),
+        WorldObject("gravel patch", x=-1.5, y=-5.5, radius=0.8,
+                    category="terrain", obstacle=False,
+                    description="loose gravel, would slow a real Go2 down"),
+    ]
+
+
+# ── Scene constructors ──────────────────────────────────────────────────────
+#
+# Each function returns a fresh `World`. Construct fresh on every call —
+# don't cache — because tests and live ticks both mutate object state
+# (positions, _prev_x, etc.).
+
+
+# ── Region definitions ──────────────────────────────────────────────────────
+#
+# Bounding boxes for the four named regions of the studio backlot. The
+# numbers match the ASCII layout diagram in `studio_scene()`. Order
+# matters: `region_at()` returns the FIRST match, so put narrower/more
+# specific zones earlier if any are added later.
+
+_APARTMENT_REGION = Region(
+    name="apartment",
+    x_min=-3.0, x_max=3.5, y_min=-3.0, y_max=4.0,
+    description="the apartment: furniture, cat, and person",
+)
+_STREET_REGION = Region(
+    name="street",
+    x_min=3.5, x_max=9.0, y_min=-9.0, y_max=4.0,
+    description="the street area with car, hydrant, lamp, cones, fence",
+)
+_STAIRS_REGION = Region(
+    name="stairs",
+    x_min=-9.0, x_max=3.5, y_min=4.0, y_max=9.0,
+    description="the stairs run-up zone",
+)
+_AGILITY_REGION = Region(
+    name="agility",
+    x_min=-9.0, x_max=-3.0, y_min=-9.0, y_max=-3.0,
+    description="the agility area: apple boxes, slopes, hill, moguls, gravel",
+)
+
+
+def apartment_scene() -> World:
+    """Just the apartment: furniture + cat + person. No street, stairs, or props."""
+    return World(objects=_apartment_objects(), regions=[_APARTMENT_REGION])
+
+
+def street_scene() -> World:
+    """Just the street: car, hydrant, lamp, cones, fence, curbs. Static only."""
+    return World(objects=_street_objects(), regions=[_STREET_REGION])
+
+
+def stairs_scene() -> World:
+    """Just the stairs: 2/3/5/8-step runs and the L-bend. Static only."""
+    return World(objects=_stairs_objects(), regions=[_STAIRS_REGION])
+
+
+def agility_scene() -> World:
+    """Just the agility area: apple boxes + slopes / hill / moguls / gravel."""
+    return World(objects=_agility_objects(), regions=[_AGILITY_REGION])
+
+
+def studio_scene() -> World:
+    """
+    The full "studio backlot" — every region in one world.
+
+    Layout (top-down, x = east/forward, y = north/left):
+
+        y=+9 ┌───────────────────────────────────┐
+             │   STAIRS                          │
+             │   (run-up zone)                   │
+        y=+4 ├──────────────────┐                │
+             │ APARTMENT        │                │
+             │ (couch, cat,     │  STREET        │
+             │  person, etc.)   │  (car, hydrant,│
+        y=0  │                  │   cones, ...)  │
+             │                  │                │
+        y=-3 ├──────────────────┘                │
+             │ AGILITY                           │
+             │ (slopes, hill, moguls, props)     │
+        y=-9 └───────────────────────────────────┘
+             x=-9   x=-3        x=+3.5   x=+9
+
+    This is what `default_scene()` returns for back-compat.
     """
     return World(
-        objects=[
-            WorldObject("couch", x=2.0, y=1.5, radius=0.6,
-                        category="furniture",
-                        description="a long soft couch along the wall"),
-            WorldObject("coffee table", x=1.2, y=0.0, radius=0.4,
-                        category="furniture",
-                        description="a low wooden coffee table"),
-            WorldObject("kitchen counter", x=-1.5, y=2.5, radius=0.7,
-                        category="furniture",
-                        description="the kitchen counter, with the sink"),
-            WorldObject("door", x=-2.5, y=0.0, radius=0.2,
-                        category="fixture",
-                        description="the doorway out to the hallway"),
-            WorldObject("rug", x=1.0, y=0.5, radius=0.0,
-                        category="decor",
-                        description="a patterned rug; not an obstacle"),
-            Wanderer(
-                name="cat",
-                x=0.5, y=-1.5,
-                radius=0.15,
-                category="animal",
-                description="a small black cat, currently wandering",
-                speed=0.15,
-                roam_radius=0.8,
-                # Reactive: cats don't like robots getting too close.
-                flee_distance=0.6,
-                flee_speed_multiplier=2.5,
-                # No seed → unpredictable in production. Tests pass their own.
-            ),
-            PathWalker(
-                name="person",
-                x=-2.0, y=1.5,
-                radius=0.25,
-                category="person",
-                description="a person walking around the apartment",
-                speed=0.4,
-                # Reactive: pause when the robot is in our way.
-                yield_distance=1.0,
-                # A counter-clockwise loop around the room periphery,
-                # threading between the static furniture.
-                waypoints=[
-                    (-2.0,  1.5),
-                    (-0.5,  2.3),
-                    ( 1.5,  2.3),
-                    ( 2.5,  0.5),
-                    ( 2.0, -1.5),
-                    (-1.0, -2.0),
-                    (-2.3,  0.0),
-                ],
-            ),
-        ]
+        objects=(
+            _apartment_objects()
+            + _street_objects()
+            + _stairs_objects()
+            + _agility_objects()
+        ),
+        regions=[
+            _APARTMENT_REGION,
+            _STREET_REGION,
+            _STAIRS_REGION,
+            _AGILITY_REGION,
+        ],
     )
+
+
+# ── Scene registry ──────────────────────────────────────────────────────────
+
+SCENES: dict[str, "callable"] = {
+    "apartment": apartment_scene,
+    "street":    street_scene,
+    "stairs":    stairs_scene,
+    "agility":   agility_scene,
+    "studio":    studio_scene,
+}
+
+
+def get_scene(name: str) -> World:
+    """
+    Return a fresh `World` by scene name. Unknown names fall back to
+    `studio` (the full backlot) with a logged warning.
+    """
+    constructor = SCENES.get(name.lower().strip())
+    if constructor is None:
+        # Defer the import so this module stays cheap to import.
+        import logging
+        logging.getLogger(__name__).warning(
+            "Unknown scene name %r; falling back to 'studio'. "
+            "Valid names: %s",
+            name, sorted(SCENES.keys()),
+        )
+        return studio_scene()
+    return constructor()
+
+
+# Back-compat: the old `default_scene()` is what most tests and demos
+# expect — keep it as an alias to the full studio backlot.
+def default_scene() -> World:
+    """Back-compat alias for `studio_scene()`. Prefer `get_scene("studio")` going forward."""
+    return studio_scene()

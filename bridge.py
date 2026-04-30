@@ -20,6 +20,8 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 
+from sweetie.core.bus import bus
+from sweetie.sim.perception import SimPerception
 from sweetie.sim.world import PROXIMITY_MAX_RANGE, Observer, World
 
 logger = logging.getLogger(__name__)
@@ -79,6 +81,23 @@ class RobotState:
         }
 
 
+# Body height envelope for the Go2 (meters). Source: Unitree firmware /
+# `unitree_sdk2py.SportClient.BodyHeight()` accepts a relative offset
+# from the standing default (~0.27 m) in roughly ±0.10 m. We expose
+# absolute heights to the operator/LLM and convert internally.
+BODY_HEIGHT_MIN = 0.18  # crouched
+BODY_HEIGHT_DEFAULT = 0.27
+BODY_HEIGHT_MAX = 0.34  # tall
+
+# Navigation tuning. NAV_KP scales speed by distance-to-target so the
+# robot decelerates smoothly on approach. NAV_ARRIVAL_TOLERANCE is the
+# distance at which we declare "arrived" and stop the goal.
+NAV_SPEED = 0.4
+NAV_KP = 0.5
+NAV_ARRIVAL_TOLERANCE = 0.20
+NAV_HEADING_TOLERANCE = 0.15  # rad — turn-then-drive threshold
+
+
 class BridgeBase:
     """Interface every bridge implements. Async because the real one will be."""
 
@@ -92,6 +111,8 @@ class BridgeBase:
     async def emergency_stop(self) -> bool: ...
     async def clear_estop(self) -> bool: ...
     async def look_at_entity(self, name: str) -> str: ...
+    async def set_body_height(self, meters: float) -> bool: ...
+    async def go_to_pose(self, x: float, y: float) -> bool: ...
 
 
 class SimBridge(BridgeBase):
@@ -109,23 +130,25 @@ class SimBridge(BridgeBase):
     BATTERY_DRAIN_IDLE = 0.0001  # %/tick
     BATTERY_DRAIN_MOVING = 0.001
 
-    # Range beyond which an entity is considered "out of perceptual range"
-    # for the purposes of perception events. Slightly bigger than the
-    # proximity sensor max range to avoid flapping at the edge.
-    PERCEPTION_RANGE = 4.0  # m
-
     def __init__(self, world: World | None = None) -> None:
         self._state = RobotState()
         self._connected = False
         self._tick_task: asyncio.Task | None = None
         self._world = world
         self._yaw_target: float | None = None  # set by look_at_entity, cleared on goal-reached or move()
-        # Perception state — tracked per dynamic entity so we can emit
-        # events on quadrant transitions. Real hardware would replace
-        # this with output from a vision pipeline; for sim we cheat with
-        # ground-truth positions.
-        self._entity_quadrant: dict[str, str] = {}
-        self._perception_log: deque[tuple[float, str]] = deque(maxlen=20)
+        # Navigation goal — set by go_to_pose, cleared on arrival, halt,
+        # estop, or any operator move() with nonzero velocity.
+        self._nav_target: tuple[float, float] | None = None
+        # Current region (world.region_at(robot pose), name or None). Used
+        # to emit zone-change events the LLM/ambient can react to.
+        self._current_region: str | None = None
+        # Perception is its own module now. SimPerception cheats with
+        # ground-truth from the World; a future RealPerception would
+        # consume camera/lidar output. The bridge just calls .tick() and
+        # exposes .recent_perceptions().
+        self._perception: SimPerception | None = (
+            SimPerception(world) if world is not None else None
+        )
 
     @property
     def world(self) -> World | None:
@@ -168,8 +191,11 @@ class SimBridge(BridgeBase):
     async def move(self, vx: float, vy: float, vyaw: float) -> bool:
         if self._state.mode in ("estop", "down"):
             return False
-        # An explicit move command always wins over an in-progress look_at.
+        # An explicit move command always wins over an in-progress look_at
+        # OR an in-progress nav goal — operator agency beats automation.
         self._yaw_target = None
+        if any((vx, vy, vyaw)):
+            self._nav_target = None
         # Clamp at the bridge as defense-in-depth.
         self._state.vx = max(-VX_LIMIT, min(VX_LIMIT, vx))
         self._state.vy = max(-VY_LIMIT, min(VY_LIMIT, vy))
@@ -180,6 +206,7 @@ class SimBridge(BridgeBase):
     async def stop_move(self) -> bool:
         self._state.vx = self._state.vy = self._state.vyaw = 0.0
         self._yaw_target = None
+        self._nav_target = None
         if self._state.mode == "moving":
             self._state.mode = "standing"
         return True
@@ -188,11 +215,48 @@ class SimBridge(BridgeBase):
         self._state.vx = self._state.vy = self._state.vyaw = 0.0
         self._state.mode = "estop"
         self._yaw_target = None
+        self._nav_target = None
         return True
 
     async def clear_estop(self) -> bool:
         if self._state.mode == "estop":
             self._state.mode = "down"
+        return True
+
+    async def set_body_height(self, meters: float) -> bool:
+        """Crouch or stand tall. Range clamped to [BODY_HEIGHT_MIN, BODY_HEIGHT_MAX].
+
+        No-op when the robot is folded (`mode == "down"`) since body
+        height in that state is dictated by the fold pose. Allowed in
+        all other modes including ESTOP for honesty — though the robot
+        is already on the floor in estop, so it's effectively a no-op
+        there too.
+        """
+        if self._state.mode == "down":
+            return False
+        clamped = max(BODY_HEIGHT_MIN, min(BODY_HEIGHT_MAX, meters))
+        self._state.body_height = clamped
+        return True
+
+    async def go_to_pose(self, x: float, y: float) -> bool:
+        """Drive in a straight line toward (x, y) under safety, decelerating on approach.
+
+        This is a *navigation goal*, not a hard command — the safety
+        guard's proximity scaling still applies, so the robot will
+        slow/stop near obstacles even mid-route. The goal is cleared on
+        arrival, on `halt`, on `emergency_stop`, on any operator move
+        with nonzero velocity, or by another `go_to_pose`.
+
+        No path-planning. No obstacle avoidance beyond the safety
+        guard's reactive slowdown. If the straight line crosses solid
+        furniture, the robot will press into it and be slowed to a halt
+        — same as if the operator joysticked into a wall.
+        """
+        if self._state.mode in ("estop", "down"):
+            return False
+        self._yaw_target = None  # nav owns yaw too
+        self._nav_target = (float(x), float(y))
+        self._state.mode = "moving"
         return True
 
     async def look_at_entity(self, name: str) -> str:
@@ -226,6 +290,25 @@ class SimBridge(BridgeBase):
             try:
                 await asyncio.sleep(dt)
                 self._integrate(dt)
+                # Forward fresh perception events to the bus so ambient
+                # cognition (and any future subscribers) can react live.
+                if self._perception is not None:
+                    for event in self._perception.drain_new_events():
+                        await bus.publish("perception", {"event": event})
+                # Region transitions — emit a zone_changed event when
+                # the robot crosses from one named region into another
+                # (or out into the void).
+                if self._world is not None:
+                    s = self._state
+                    region = self._world.region_at(s.x, s.y)
+                    new_name = region.name if region is not None else None
+                    if new_name != self._current_region:
+                        old_name = self._current_region
+                        self._current_region = new_name
+                        await bus.publish("zone_changed", {
+                            "from": old_name,
+                            "to": new_name,
+                        })
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -249,6 +332,35 @@ class SimBridge(BridgeBase):
                 s.vy = 0.0
                 s.vyaw = max(-VYAW_LIMIT, min(VYAW_LIMIT, YAW_KP * err))
 
+        # If a nav target is active, compute desired vx / vyaw to drive
+        # toward it. Yaw target takes precedence (above) — they shouldn't
+        # both be set in practice, but if they are, look_at wins this tick.
+        elif self._nav_target is not None and s.mode != "estop":
+            tx, ty = self._nav_target
+            dx = tx - s.x
+            dy = ty - s.y
+            dist = math.hypot(dx, dy)
+            if dist < NAV_ARRIVAL_TOLERANCE:
+                # Arrived — clear goal and stop.
+                self._nav_target = None
+                s.vx = s.vy = s.vyaw = 0.0
+                s.mode = "standing"
+            else:
+                target_yaw = math.atan2(dy, dx)
+                yaw_err = _wrap_pi(target_yaw - s.yaw)
+                if abs(yaw_err) > NAV_HEADING_TOLERANCE:
+                    # Turn toward target before driving forward.
+                    s.vx = 0.0
+                    s.vy = 0.0
+                    s.vyaw = max(-VYAW_LIMIT, min(VYAW_LIMIT, YAW_KP * yaw_err))
+                else:
+                    # Drive forward, decelerating on approach.
+                    speed = min(NAV_SPEED, NAV_KP * dist)
+                    s.vx = speed
+                    s.vy = 0.0
+                    # Gentle heading correction while driving.
+                    s.vyaw = max(-VYAW_LIMIT, min(VYAW_LIMIT, 0.5 * yaw_err))
+
         # Pose integration in world frame.
         cos_y, sin_y = math.cos(s.yaw), math.sin(s.yaw)
         s.x += (s.vx * cos_y - s.vy * sin_y) * dt
@@ -263,7 +375,8 @@ class SimBridge(BridgeBase):
         if self._world is not None:
             self._world.tick(dt, observer=Observer(s.x, s.y, s.yaw))
             s.range_obstacle = self._world.proximity_ranges(s.x, s.y, s.yaw)
-            self._update_perceptions()
+            if self._perception is not None:
+                self._perception.tick(s.x, s.y, s.yaw)
 
         # Power.
         moving = any((s.vx, s.vy, s.vyaw))
@@ -273,74 +386,26 @@ class SimBridge(BridgeBase):
             - (self.BATTERY_DRAIN_MOVING if moving else self.BATTERY_DRAIN_IDLE),
         )
 
-    # ── Perception (sim-only, ground-truth shortcut) ────────────────────────
+    # ── Perception delegation ──────────────────────────────────────────────
     #
-    # In real hardware this would be a vision/lidar pipeline producing
-    # entity-tracking events. For sim we just read positions out of the
-    # world and emit events on quadrant transitions. The seam here is
-    # `recent_perceptions()` — the LLM gets the same shape regardless of
-    # how the events were derived.
-
-    def _classify_quadrant(self, ox: float, oy: float) -> str:
-        """Return 'front'|'left'|'back'|'right'|'far' for a world-frame point."""
-        s = self._state
-        dx, dy = ox - s.x, oy - s.y
-        dist = math.hypot(dx, dy)
-        if dist > self.PERCEPTION_RANGE:
-            return "far"
-        cy, sy = math.cos(-s.yaw), math.sin(-s.yaw)
-        rx = dx * cy - dy * sy
-        ry = dx * sy + dy * cy
-        ang = math.atan2(ry, rx)
-        if -math.pi / 4 <= ang < math.pi / 4:
-            return "front"
-        if math.pi / 4 <= ang < 3 * math.pi / 4:
-            return "left"
-        if ang >= 3 * math.pi / 4 or ang < -3 * math.pi / 4:
-            return "back"
-        return "right"
-
-    def _update_perceptions(self) -> None:
-        """Track quadrant transitions for dynamic entities; log meaningful ones."""
-        if self._world is None:
-            return
-        now = time.time()
-        for obj in self._world.objects:
-            if not obj.dynamic:
-                continue
-            new_q = self._classify_quadrant(obj.x, obj.y)
-            old_q = self._entity_quadrant.get(obj.name)
-            if new_q == old_q:
-                continue
-            self._entity_quadrant[obj.name] = new_q
-            # Only log "interesting" transitions — entry/exit from range,
-            # and arrivals into the front quadrant (the most safety-relevant).
-            # Other transitions (back → left, left → right, etc.) are noise.
-            if old_q is None:
-                # First observation; note the initial location only if in range.
-                if new_q != "far":
-                    self._perception_log.append(
-                        (now, f"{obj.name} initially in {new_q} quadrant")
-                    )
-            elif old_q == "far" and new_q != "far":
-                self._perception_log.append(
-                    (now, f"{obj.name} entered range ({new_q})")
-                )
-            elif old_q != "far" and new_q == "far":
-                self._perception_log.append(
-                    (now, f"{obj.name} left visible range")
-                )
-            elif new_q == "front" and old_q in ("left", "right"):
-                self._perception_log.append(
-                    (now, f"{obj.name} now directly in front")
-                )
+    # The bridge owns the perception layer and exposes its results. In sim
+    # this is SimPerception (ground-truth shortcut over the World); in
+    # real hardware it would be a camera/lidar pipeline. The cognition
+    # layer queries this same surface either way.
 
     def recent_perceptions(self, window_s: float = 30.0) -> list[dict]:
         """Return perception events from the last `window_s` seconds, newest last."""
-        now = time.time()
-        cutoff = now - window_s
-        return [
-            {"age_s": round(now - t, 1), "event": e}
-            for t, e in self._perception_log
-            if t >= cutoff
-        ]
+        if self._perception is None:
+            return []
+        return self._perception.recent_events(window_s=window_s)
+
+    def vision_summary(self) -> list[dict]:
+        """Return entities currently visible through the forward camera (FOV + occlusion)."""
+        if self._perception is None:
+            return []
+        s = self._state
+        return self._perception.vision_summary(s.x, s.y, s.yaw)
+
+    def current_region(self) -> str | None:
+        """Name of the named region the robot is currently in, or None."""
+        return self._current_region

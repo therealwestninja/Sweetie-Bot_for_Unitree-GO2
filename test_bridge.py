@@ -242,16 +242,6 @@ async def test_perception_logs_initial_observation():
 
 
 @pytest.mark.asyncio
-async def test_perception_classify_quadrant_far():
-    """Entity beyond perception range should classify as 'far'."""
-    b = SimBridge()
-    await b.connect()
-    q = b._classify_quadrant(b.PERCEPTION_RANGE + 1.0, 0.0)
-    assert q == "far"
-    await b.disconnect()
-
-
-@pytest.mark.asyncio
 async def test_perception_logs_quadrant_change_to_front():
     """Entity moving from left into front should generate an event."""
     from sweetie.sim.world import PathWalker
@@ -289,4 +279,150 @@ async def test_bridge_observer_triggers_cat_flee():
     # move away (positive x direction, since flee = away from observer).
     await asyncio.sleep(0.4)
     assert cat.x > 0.4  # moved further from the robot
+    await b.disconnect()
+
+
+# ── Body height ─────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_set_body_height_clamps_to_range():
+    from sweetie.core.bridge import BODY_HEIGHT_MAX, BODY_HEIGHT_MIN
+    b = SimBridge()
+    await b.connect()
+    b._state.mode = "standing"
+    await b.set_body_height(99.0)
+    assert b._state.body_height == pytest.approx(BODY_HEIGHT_MAX)
+    await b.set_body_height(-99.0)
+    assert b._state.body_height == pytest.approx(BODY_HEIGHT_MIN)
+    await b.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_set_body_height_refused_when_folded():
+    b = SimBridge()
+    await b.connect()
+    # Default mode is "down" (folded)
+    ok = await b.set_body_height(0.27)
+    assert ok is False
+    await b.disconnect()
+
+
+# ── Navigation (go_to_pose) ─────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_go_to_pose_drives_robot_toward_target():
+    b = SimBridge()
+    await b.connect()
+    b._state.mode = "standing"
+    ok = await b.go_to_pose(2.0, 0.0)
+    assert ok is True
+    # Wait for the tick loop to drive the robot
+    await asyncio.sleep(0.5)
+    s = await b.get_state()
+    assert s.x > 0.1  # moved toward target
+    await b.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_go_to_pose_arrives_and_clears_goal():
+    b = SimBridge()
+    await b.connect()
+    b._state.mode = "standing"
+    await b.go_to_pose(0.5, 0.0)  # close target
+    # Wait long enough to arrive
+    await asyncio.sleep(3.0)
+    assert b._nav_target is None  # goal cleared
+    s = await b.get_state()
+    # Within arrival tolerance of (0.5, 0)
+    assert abs(s.x - 0.5) < 0.3
+    await b.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_operator_move_cancels_nav():
+    """Any nonzero operator velocity command cancels an active nav goal."""
+    b = SimBridge()
+    await b.connect()
+    b._state.mode = "standing"
+    await b.go_to_pose(5.0, 5.0)
+    assert b._nav_target is not None
+    await b.move(0.1, 0.0, 0.0)
+    assert b._nav_target is None
+    await b.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_estop_cancels_nav():
+    b = SimBridge()
+    await b.connect()
+    b._state.mode = "standing"
+    await b.go_to_pose(5.0, 5.0)
+    await b.emergency_stop()
+    assert b._nav_target is None
+    await b.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_go_to_pose_refused_when_estop():
+    b = SimBridge()
+    await b.connect()
+    b._state.mode = "estop"
+    ok = await b.go_to_pose(1.0, 0.0)
+    assert ok is False
+    await b.disconnect()
+
+
+# ── Region tracking ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_bridge_publishes_zone_change_event():
+    """Robot starting in 'apartment' should emit a zone_changed event on first tick."""
+    from sweetie.core.bus import bus
+    from sweetie.sim.world import studio_scene
+
+    captured: list[dict] = []
+
+    async def collect(payload):
+        captured.append(payload)
+
+    bus.subscribe("zone_changed", collect)
+    try:
+        b = SimBridge(world=studio_scene())
+        await b.connect()
+        # Robot starts at (0, 0) which is inside the apartment region.
+        # First tick should fire from None → "apartment".
+        await asyncio.sleep(0.1)
+        assert any(p["to"] == "apartment" for p in captured)
+        await b.disconnect()
+    finally:
+        bus._subs.clear()
+
+
+@pytest.mark.asyncio
+async def test_bridge_current_region_reflects_pose():
+    """Manually moving the robot into a different region updates current_region."""
+    from sweetie.sim.world import studio_scene
+    b = SimBridge(world=studio_scene())
+    await b.connect()
+    await asyncio.sleep(0.1)
+    assert b.current_region() == "apartment"
+    # Teleport robot to street area
+    b._state.x = 6.0
+    b._state.y = 0.0
+    await asyncio.sleep(0.1)
+    assert b.current_region() == "street"
+    await b.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_bridge_with_no_regions_has_none_current():
+    """A world with no regions returns None for current_region throughout."""
+    from sweetie.sim.world import World, WorldObject
+    b = SimBridge(world=World([WorldObject("rock", 0, 0)]))  # no regions
+    await b.connect()
+    await asyncio.sleep(0.1)
+    assert b.current_region() is None
     await b.disconnect()

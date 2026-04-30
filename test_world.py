@@ -17,7 +17,11 @@ from sweetie.sim.world import (
     Wanderer,
     World,
     WorldObject,
+    apartment_scene,
     default_scene,
+    stairs_scene,
+    street_scene,
+    studio_scene,
 )
 
 
@@ -600,3 +604,233 @@ def test_default_scene_person_is_reactive():
     s = default_scene()
     person = next(o for o in s.objects if o.name == "person")
     assert person.yield_distance > 0
+
+
+# ── Phase 1: scene expansion + obstacle field ───────────────────────────────
+
+
+def test_world_object_default_obstacle_true():
+    o = WorldObject("rock", 0, 0)
+    assert o.obstacle is True
+
+
+def test_world_object_obstacle_can_be_false():
+    o = WorldObject("slope", 0, 0, obstacle=False)
+    assert o.obstacle is False
+
+
+def test_proximity_skips_non_obstacles():
+    """A passable object (terrain) shouldn't appear in range_obstacle."""
+    w = World([
+        WorldObject("real wall", x=1.0, y=0.0, radius=0.0, obstacle=True),
+        WorldObject("phantom hill", x=0.5, y=0.0, radius=0.0, obstacle=False),
+    ])
+    r = w.proximity_ranges(0, 0, 0)
+    # Should report the wall at 1.0m, NOT the closer-but-passable hill.
+    assert r[QUADRANT_FRONT] == pytest.approx(1.0)
+
+
+def test_default_scene_has_apple_boxes():
+    s = default_scene()
+    names = [o.name for o in s.objects]
+    assert any("apple box" in n for n in names)
+    apple_boxes = [o for o in s.objects if "apple box" in o.name]
+    assert len(apple_boxes) >= 4
+    for b in apple_boxes:
+        assert b.category == "prop"
+
+
+def test_default_scene_has_road_furniture():
+    s = default_scene()
+    names = [o.name for o in s.objects]
+    assert "car" in names
+    assert "fire hydrant" in names
+    assert "lamp post" in names
+    cones = [o for o in s.objects if o.category == "cone"]
+    assert len(cones) >= 4
+
+
+def test_default_scene_has_all_stair_runs():
+    s = default_scene()
+    stair_descs = [o.description for o in s.objects if o.category == "stairs"]
+    # 2, 3, 5, 8 step straight runs + L-bend pieces
+    assert any("2-step" in d for d in stair_descs)
+    assert any("3-step" in d for d in stair_descs)
+    assert any("5-step" in d for d in stair_descs)
+    assert any("8-step" in d for d in stair_descs)
+    l_bend = [o for o in s.objects if "L-bend" in o.name]
+    assert len(l_bend) >= 3  # lower run, platform, upper run
+
+
+def test_default_scene_has_terrain_features():
+    s = default_scene()
+    terrain_names = [o.name for o in s.objects if o.category == "terrain"]
+    assert any("slope" in n for n in terrain_names)
+    assert any("hill" in n for n in terrain_names)
+    assert any("mogul" in n for n in terrain_names)
+
+
+def test_default_scene_terrain_is_passable():
+    """Terrain features must NOT block motion in our kinematic sim."""
+    s = default_scene()
+    for o in s.objects:
+        if o.category == "terrain":
+            assert o.obstacle is False, f"{o.name} should be passable"
+
+
+def test_default_scene_apple_boxes_are_obstacles():
+    """Stage props are real obstacles."""
+    s = default_scene()
+    for o in s.objects:
+        if "apple box" in o.name:
+            assert o.obstacle is True
+
+
+def test_to_dict_includes_obstacle_flag():
+    o = WorldObject("foo", 0, 0, obstacle=False)
+    assert o.to_dict()["obstacle"] is False
+
+
+# ── M? scene-registry: focused practice scenes ──────────────────────────────
+
+
+def test_apartment_scene_has_only_apartment_objects():
+    from sweetie.sim.world import apartment_scene
+    s = apartment_scene()
+    cats = {o.category for o in s.objects}
+    assert "vehicle" not in cats          # no street car
+    assert "stairs" not in cats           # no stairs
+    assert "prop" not in cats             # no apple boxes
+    assert "animal" in cats and "person" in cats  # cat + person are here
+    # The classic apartment furniture
+    names = {o.name for o in s.objects}
+    assert "couch" in names and "kitchen counter" in names
+
+
+def test_street_scene_is_static_only():
+    from sweetie.sim.world import street_scene
+    s = street_scene()
+    assert "car" in {o.name for o in s.objects}
+    assert all(not o.dynamic for o in s.objects)  # no cat, no person
+
+
+def test_stairs_scene_is_only_stairs():
+    from sweetie.sim.world import stairs_scene
+    s = stairs_scene()
+    assert all(o.category == "stairs" for o in s.objects)
+    assert any("L-bend" in o.name for o in s.objects)
+    assert any("8-step" in o.name for o in s.objects)
+
+
+def test_agility_scene_has_props_and_terrain():
+    from sweetie.sim.world import agility_scene
+    s = agility_scene()
+    cats = {o.category for o in s.objects}
+    assert cats == {"prop", "terrain"}
+    # Apple boxes are obstacles; terrain is passable.
+    for o in s.objects:
+        if o.category == "terrain":
+            assert o.obstacle is False
+        else:
+            assert o.obstacle is True
+
+
+def test_studio_scene_is_union_of_all_regions():
+    from sweetie.sim.world import (
+        agility_scene, apartment_scene, stairs_scene, street_scene,
+        studio_scene,
+    )
+    studio = studio_scene()
+    expected_count = (
+        len(apartment_scene().objects)
+        + len(street_scene().objects)
+        + len(stairs_scene().objects)
+        + len(agility_scene().objects)
+    )
+    assert len(studio.objects) == expected_count
+
+
+def test_default_scene_is_studio_scene_back_compat():
+    """Existing tests and demos call default_scene(); it must still return the full backlot."""
+    from sweetie.sim.world import default_scene, studio_scene
+    a = default_scene()
+    b = studio_scene()
+    # Same names — fresh instances each call so identity won't match.
+    assert {o.name for o in a.objects} == {o.name for o in b.objects}
+
+
+def test_get_scene_dispatches_by_name():
+    from sweetie.sim.world import get_scene
+    assert any(o.name == "couch" for o in get_scene("apartment").objects)
+    assert any(o.name == "car" for o in get_scene("street").objects)
+    assert all(o.category == "stairs" for o in get_scene("stairs").objects)
+    # Unknown name → falls back to studio (logs a warning, doesn't crash).
+    fallback = get_scene("does-not-exist")
+    assert any(o.name == "couch" for o in fallback.objects)
+    assert any(o.name == "car" for o in fallback.objects)
+
+
+def test_get_scene_handles_case_and_whitespace():
+    from sweetie.sim.world import get_scene
+    s = get_scene("  Apartment  ")
+    assert any(o.name == "couch" for o in s.objects)
+
+
+def test_scenes_return_fresh_worlds_each_call():
+    """Tests and live ticks both mutate object state; scenes must be fresh."""
+    from sweetie.sim.world import apartment_scene
+    a = apartment_scene()
+    cat_a = next(o for o in a.objects if o.name == "cat")
+    cat_a.x = 999.0
+    b = apartment_scene()
+    cat_b = next(o for o in b.objects if o.name == "cat")
+    assert cat_b.x != 999.0
+
+
+# ── Regions ─────────────────────────────────────────────────────────────────
+
+
+def test_region_contains():
+    from sweetie.sim.world import Region
+    r = Region("test", x_min=-1, x_max=1, y_min=-1, y_max=1)
+    assert r.contains(0, 0)
+    assert r.contains(-1, -1)  # inclusive boundary
+    assert r.contains(1, 1)
+    assert not r.contains(2, 0)
+    assert not r.contains(0, -2)
+
+
+def test_region_at_returns_none_outside_any_region():
+    s = apartment_scene()
+    # Apartment region is x in [-3, 3.5], y in [-3, 4]; far away → None
+    assert s.region_at(100, 100) is None
+
+
+def test_region_at_returns_first_match():
+    s = apartment_scene()
+    r = s.region_at(0, 0)
+    assert r is not None and r.name == "apartment"
+
+
+def test_studio_scene_has_all_four_regions():
+    s = studio_scene()
+    region_names = {r.name for r in s.regions}
+    assert region_names == {"apartment", "street", "stairs", "agility"}
+
+
+def test_studio_region_at_each_area():
+    s = studio_scene()
+    # Check a representative point inside each region
+    assert s.region_at(0, 0).name == "apartment"     # apartment center-ish
+    assert s.region_at(6, 0).name == "street"        # street center
+    assert s.region_at(0, 6).name == "stairs"        # stairs center
+    assert s.region_at(-5, -5).name == "agility"     # agility center
+
+
+def test_focused_scenes_have_their_own_region():
+    """Each focused scene has exactly one region matching its area."""
+    from sweetie.sim.world import agility_scene
+    assert {r.name for r in apartment_scene().regions} == {"apartment"}
+    assert {r.name for r in street_scene().regions} == {"street"}
+    assert {r.name for r in stairs_scene().regions} == {"stairs"}
+    assert {r.name for r in agility_scene().regions} == {"agility"}
