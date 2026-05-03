@@ -40,7 +40,11 @@ What this means for the roadmap:
 | Conversation continuity within a session  | ✅       | Sliding-window history, supervisor messages and autonomy ticks share the same transcript |
 | Cooldown protection                       | ✅       | Prevents tick thrashing (8s default, tunable)              |
 | Multi-step planning beyond one tool chain | ⏳       | LLM picks tool sequences within a tick; cross-tick plans are emergent only |
-| Cross-session memory                      | 🚫       | Out of scope — sessions are 15-30 min, no persistence story makes sense |
+| Cross-session memory (facts + episodes)   | ✅       | SQLite at `~/.sweetie/memory.db`; supervisor curates via dashboard |
+| Memory proposal-approval workflow         | ✅       | `remember` tool proposes; supervisor approves/rejects/edits — sweetie never writes unilaterally |
+| Episode reflection at session end         | ✅       | One-paragraph summary on battery_low / recalled / shutdown |
+| Memory edit history / audit trail         | ⏳       | Rejected facts stay for audit, but no per-fact change history |
+| Memory search / category filters in UI    | ⏳       | Dashboard shows all by category; no search yet              |
 | Learning from supervisor feedback         | ⏳       | Future work; would require feedback affordances we don't have yet |
 
 ### Control & safety
@@ -135,7 +139,10 @@ What this means for the roadmap:
 | Supervisor chat channel                   | ✅       | Distinct chat-line variants for autonomy-initiated vs. supervisor-prompted |
 | Override panel (joystick + posture + arm + E-STOP) | ✅ | Collapsed by default; spacebar E-STOP works regardless     |
 | Map zoom / pan controls                   | ✅       | Wheel zoom (cursor-anchored), drag pan, +/-/0 keys         |
-| Persistent supervisor settings            | ⏳       | No state survives restart                                   |
+| Memory panel (pending tray + approved + episodes) | ✅ | Collapsible; auto-expands on first proposal of a session   |
+| Session bar with recall button            | ✅       | "Recall sweetie" ends session immediately + writes summary |
+| Persistent supervisor settings (UI prefs) | ⏳       | UI panel-open state, etc. don't survive reload yet         |
+| Begin-new-session-without-restart button  | ⏳       | After session ends, server restart required for now        |
 | Mobile-friendly UI                        | 🚫       | Supervisor needs a real screen and keyboard                |
 
 ### Sim-to-real transition
@@ -162,20 +169,23 @@ Re-litigate only with new information.
   one event loop, one chokepoint. Splitting cognition into its own
   service would buy isolation we don't need and complicate the safety
   story.
-- **External state stores.** No Redis, no Postgres, no SQLite. State
-  lives in the running process. If you want persistence, log the
-  WebSocket traffic.
+- **External state stores beyond local SQLite.** No Redis, no Postgres.
+  Persistent memory lives in `~/.sweetie/memory.db` — embedded SQLite,
+  zero network surface. Adding a real database server is unjustified
+  at the volume of data a single supervisor accumulates.
 - **Behaviour trees / planners as a separate layer.** The LLM is the
   planner. Adding a separate BT layer would create two minds with
   different opinions about what to do next. The safety FSM is enough.
 - **Custom RL controllers.** Real Go2 firmware ships with its own
   controllers and the SportClient wraps them. We don't need to ship
   policies; we just need to drive the SportClient correctly.
-- **Cross-session memory / learning across sessions.** Sessions are
-  15-30 minutes. Memory across sessions is a different product
-  (assistant, not companion).
-- **Multiple supervisors per session.** Authentication, conflict
-  resolution, role permissions — all real work, no use case yet.
+- **Multi-supervisor / multi-user memory.** One profile per install,
+  for now. Authentication, conflict resolution, role permissions — all
+  real work, no use case yet.
+- **Vector embeddings / RAG over memory.** SQL `LIKE` and category
+  filters are plenty at the volumes a single supervisor produces over
+  a year of sessions. Adding embeddings would buy worse retrieval and
+  a real dependency. Easy to revisit later — the schema doesn't lock us in.
 - **Recording/replay system.** Useful eventually, but not until first
   hardware bring-up exposes the things actually worth replaying.
 

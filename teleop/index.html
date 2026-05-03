@@ -131,9 +131,61 @@
       </details>
     </section>
 
-    <!-- RIGHT: supervisor chat channel -->
+    <!-- RIGHT: supervisor chat channel + memory panel -->
     <section class="panel chat-panel">
       <h2 class="panel-title">supervisor channel <span class="dim">/ talk to sweetie</span></h2>
+
+      <!--
+        Memory panel: pending tray + approved facts + episodes. Collapsed
+        by default; the pending count surfaces in the summary so the
+        supervisor sees new proposals without having to expand.
+      -->
+      <details class="memory-panel" id="memory-panel">
+        <summary class="memory-summary">
+          <span class="memory-label">memory</span>
+          <span class="memory-counts">
+            <span class="memory-count memory-count-pending" id="mem-count-pending">0 pending</span>
+            <span class="memory-count" id="mem-count-approved">0 known</span>
+            <span class="memory-count" id="mem-count-episodes">0 sessions</span>
+          </span>
+        </summary>
+        <div class="memory-body">
+          <!-- Pending tray: actionable proposals -->
+          <div class="memory-section" id="mem-section-pending">
+            <div class="memory-section-head">
+              <span class="memory-section-title">pending — sweetie proposed these</span>
+              <span class="memory-batch">
+                <button class="btn-small" data-mem-batch="approve_all">approve all</button>
+                <button class="btn-small" data-mem-batch="reject_all">reject all</button>
+              </span>
+            </div>
+            <ul class="memory-list" id="mem-list-pending"></ul>
+          </div>
+
+          <!-- Approved: read mostly, supervisor can edit/forget -->
+          <div class="memory-section">
+            <div class="memory-section-head">
+              <span class="memory-section-title">approved — sweetie remembers these</span>
+            </div>
+            <ul class="memory-list" id="mem-list-approved"></ul>
+          </div>
+
+          <!-- Past episodes: read-only with a forget action -->
+          <div class="memory-section">
+            <div class="memory-section-head">
+              <span class="memory-section-title">past sessions</span>
+            </div>
+            <ul class="memory-list" id="mem-list-episodes"></ul>
+          </div>
+        </div>
+      </details>
+
+      <!-- Session control: recall sweetie / end session manually -->
+      <div class="session-bar" id="session-bar">
+        <span class="session-status" id="session-status">session active</span>
+        <button class="btn-small btn-recall" id="btn-recall">recall sweetie</button>
+      </div>
+
       <div class="chat-log" id="chat-log">
         <div class="chat-line chat-sys">
           <span class="chat-tag">sys</span>

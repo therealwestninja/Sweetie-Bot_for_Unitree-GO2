@@ -29,6 +29,16 @@
     zoomFit:    $('zoom-fit'),
     goalStrip:  $('goal-strip'),
     goalValue:  $('goal-value'),
+    memPanel:    $('memory-panel'),
+    memCountPending:   $('mem-count-pending'),
+    memCountApproved:  $('mem-count-approved'),
+    memCountEpisodes:  $('mem-count-episodes'),
+    memListPending:    $('mem-list-pending'),
+    memListApproved:   $('mem-list-approved'),
+    memListEpisodes:   $('mem-list-episodes'),
+    sessionBar:    $('session-bar'),
+    sessionStatus: $('session-status'),
+    btnRecall:     $('btn-recall'),
   };
 
   // World data, fetched once on connect. Shape: { objects: [...] }
@@ -52,6 +62,10 @@
       setStat('conn', 'live', 'ok');
       logSys('link established');
       if (!world) loadWorld();
+      // Fresh memory state every time we (re)connect — covers reload
+      // mid-session and reconnection after a brief drop.
+      refreshMemory();
+      refreshSession();
     };
     ws.onclose = () => {
       setStat('conn', 'down', 'err');
@@ -75,15 +89,17 @@
 
   function handleServerMsg(m) {
     switch (m.type) {
-      case 'telemetry':  applyTelemetry(m); break;
-      case 'speak':      logChat('spk', m.text); pulseBrand(); break;
-      case 'intent':     logIntent(m); pulseBrand(); break;
-      case 'assist':     logAssist(m); pulseBrand(); break;
-      case 'autonomy':   logChat('autonomy', m.text); pulseBrand(); break;
-      case 'estop':      logSys('E-STOP latched'); pulseBrand(); break;
-      case 'rejected':   logErr(`command rejected: ${m.reason}`); break;
-      case 'ack':        markEvent(`ack:${m.of}=${m.ok ? 'ok' : 'fail'}`); break;
-      case 'error':      logErr(m.reason || 'unknown error'); break;
+      case 'telemetry':       applyTelemetry(m); break;
+      case 'speak':           logChat('spk', m.text); pulseBrand(); break;
+      case 'intent':          logIntent(m); pulseBrand(); break;
+      case 'assist':          logAssist(m); pulseBrand(); break;
+      case 'autonomy':        logChat('autonomy', m.text); pulseBrand(); break;
+      case 'memory_pending':  onMemoryPending(m); pulseBrand(); break;
+      case 'session_ended':   onSessionEnded(m); break;
+      case 'estop':           logSys('E-STOP latched'); pulseBrand(); break;
+      case 'rejected':        logErr(`command rejected: ${m.reason}`); break;
+      case 'ack':             markEvent(`ack:${m.of}=${m.ok ? 'ok' : 'fail'}`); break;
+      case 'error':           logErr(m.reason || 'unknown error'); break;
     }
   }
 
@@ -497,6 +513,7 @@
       user: 'you', bot: 'sweetie', sys: 'sys', spk: 'speak', err: 'err',
       autonomy: 'sweetie',
       'goal-set': 'goal', 'goal-cleared': 'goal',
+      'memory-pending': 'remember',
       'intent-ok': 'do', 'intent-noop': 'do', 'intent-rej': 'do✗',
       assist: 'assist',
     }[kind] || kind;
@@ -519,6 +536,277 @@
     void els.brand.offsetWidth;
     els.brand.classList.add('is-pulse');
   }
+
+  // ── Memory panel ──────────────────────────────────────────────────────────
+
+  // Cache the last-known memory state so live `memory_pending` events
+  // can prepend without doing a full GET each time. The full GET happens
+  // on connect and after every action, so drift is bounded.
+  let memoryState = {
+    pending: [],
+    approved: [],
+    rejected: [],
+    episodes: [],
+    session_ended: false,
+  };
+
+  async function refreshMemory() {
+    try {
+      const r = await fetch('/api/memory');
+      const data = await r.json();
+      if (data.ok) {
+        memoryState = data;
+        renderMemory();
+      } else {
+        // Memory disabled — leave panel empty, keep counts at 0.
+        memoryState = {
+          pending: [], approved: [], rejected: [], episodes: [],
+          session_ended: false,
+        };
+        renderMemory();
+      }
+    } catch (err) {
+      console.warn('refreshMemory failed', err);
+    }
+  }
+
+  function renderMemory() {
+    // Counts in the summary row.
+    const np = memoryState.pending.length;
+    const na = memoryState.approved.length;
+    const ne = memoryState.episodes.length;
+    els.memCountPending.textContent  = `${np} pending`;
+    els.memCountApproved.textContent = `${na} known`;
+    els.memCountEpisodes.textContent = `${ne} sessions`;
+    els.memCountPending.classList.toggle('has-items', np > 0);
+
+    renderFactList(els.memListPending,  memoryState.pending,  'pending');
+    renderFactList(els.memListApproved, memoryState.approved, 'approved');
+    renderEpisodeList(els.memListEpisodes, memoryState.episodes);
+  }
+
+  function renderFactList(ul, facts, status) {
+    ul.innerHTML = '';
+    for (const f of facts) {
+      const li = document.createElement('li');
+      li.className = 'mem-item';
+      li.dataset.factId = String(f.id);
+
+      const text = document.createElement('div');
+      text.className = 'mem-item-text';
+      const cat = document.createElement('span');
+      cat.className = `mem-item-cat cat-${f.category}`;
+      cat.textContent = f.category;
+      text.appendChild(cat);
+      text.appendChild(document.createTextNode(f.content));
+      li.appendChild(text);
+
+      const actions = document.createElement('div');
+      actions.className = 'mem-item-actions';
+      if (status === 'pending') {
+        actions.appendChild(makeBtn('approve', 'btn-approve',
+          () => factAction(f.id, 'approve')));
+        actions.appendChild(makeBtn('edit', 'btn-edit',
+          () => beginEdit(li, f, /*alsoApprove=*/true)));
+        actions.appendChild(makeBtn('reject', 'btn-reject',
+          () => factAction(f.id, 'reject')));
+      } else if (status === 'approved') {
+        actions.appendChild(makeBtn('edit', 'btn-edit',
+          () => beginEdit(li, f, /*alsoApprove=*/false)));
+        actions.appendChild(makeBtn('forget', 'btn-reject',
+          () => factAction(f.id, 'delete')));
+      }
+      li.appendChild(actions);
+      ul.appendChild(li);
+    }
+  }
+
+  function renderEpisodeList(ul, episodes) {
+    ul.innerHTML = '';
+    // Most-recent first
+    const sorted = [...episodes].sort(
+      (a, b) => (b.started_at || '').localeCompare(a.started_at || '')
+    );
+    for (const e of sorted) {
+      const li = document.createElement('li');
+      li.className = 'mem-item';
+      li.dataset.episodeId = String(e.id);
+
+      const text = document.createElement('div');
+      text.className = 'mem-item-text';
+      const meta = document.createElement('span');
+      meta.className = 'mem-item-cat';
+      const dt = (e.started_at || '').slice(0, 10);
+      const reason = e.end_reason || (e.ended_at ? 'closed' : 'open');
+      meta.textContent = `${dt} · ${reason}`;
+      text.appendChild(meta);
+      text.appendChild(document.createTextNode(
+        e.summary || (e.ended_at ? '(no summary)' : '(in progress)')
+      ));
+      li.appendChild(text);
+
+      const actions = document.createElement('div');
+      actions.className = 'mem-item-actions';
+      // Don't allow deleting the in-progress episode.
+      if (e.ended_at) {
+        actions.appendChild(makeBtn('forget', 'btn-reject',
+          () => episodeDelete(e.id)));
+      }
+      li.appendChild(actions);
+      ul.appendChild(li);
+    }
+  }
+
+  function makeBtn(label, cls, handler) {
+    const b = document.createElement('button');
+    b.className = `btn-small ${cls}`;
+    b.textContent = label;
+    b.addEventListener('click', handler);
+    return b;
+  }
+
+  function beginEdit(li, fact, alsoApprove) {
+    // Replace the actions row with an inline textarea + save/cancel.
+    if (li.querySelector('.mem-item-edit')) return;  // already editing
+    const edit = document.createElement('div');
+    edit.className = 'mem-item-edit';
+    const ta = document.createElement('textarea');
+    ta.value = fact.content;
+    ta.rows = 2;
+    edit.appendChild(ta);
+    const actions = document.createElement('div');
+    actions.className = 'mem-item-actions';
+    actions.appendChild(makeBtn(alsoApprove ? 'save & approve' : 'save',
+      'btn-approve', async () => {
+        await factEdit(fact.id, ta.value, alsoApprove);
+      }));
+    actions.appendChild(makeBtn('cancel', '',
+      () => { edit.remove(); }));
+    edit.appendChild(actions);
+    li.appendChild(edit);
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+  }
+
+  async function factAction(id, action) {
+    try {
+      await fetch(`/api/memory/facts/${id}/${action}`, { method: 'POST' });
+      await refreshMemory();
+    } catch (err) {
+      logErr(`memory action failed: ${err.message}`);
+    }
+  }
+
+  async function factEdit(id, content, alsoApprove) {
+    const url = alsoApprove
+      ? `/api/memory/facts/${id}/approve`
+      : `/api/memory/facts/${id}/edit`;
+    try {
+      await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content }),
+      });
+      await refreshMemory();
+    } catch (err) {
+      logErr(`memory edit failed: ${err.message}`);
+    }
+  }
+
+  async function episodeDelete(id) {
+    try {
+      await fetch(`/api/memory/episodes/${id}/delete`, { method: 'POST' });
+      await refreshMemory();
+    } catch (err) {
+      logErr(`episode forget failed: ${err.message}`);
+    }
+  }
+
+  // Batch ops on the pending tray
+  document.querySelectorAll('[data-mem-batch]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const op = btn.dataset.memBatch;  // 'approve_all' | 'reject_all'
+      try {
+        await fetch(`/api/memory/pending/${op}`, { method: 'POST' });
+        await refreshMemory();
+      } catch (err) {
+        logErr(`batch op failed: ${err.message}`);
+      }
+    });
+  });
+
+  function onMemoryPending(m) {
+    // Live feedback: prepend to the pending list and bump the count
+    // immediately, then re-fetch for the canonical state.
+    if (m.id != null) {
+      memoryState.pending.unshift({
+        id: m.id,
+        content: m.fact || '',
+        category: m.category || 'world',
+      });
+      renderMemory();
+    }
+    // Show in chat too — distinct line variant in case the panel is collapsed.
+    logChat('memory-pending',
+      `${m.category || 'world'}: ${m.fact || ''}`);
+    // Auto-open the panel once on the first pending fact, so a new
+    // supervisor sees the workflow without hunting for it.
+    if (!els.memPanel.dataset.openedOnce) {
+      els.memPanel.open = true;
+      els.memPanel.dataset.openedOnce = '1';
+    }
+    // Background reconcile.
+    refreshMemory();
+  }
+
+  // ── Session control ───────────────────────────────────────────────────────
+
+  let sessionEnded = false;
+
+  async function refreshSession() {
+    try {
+      const r = await fetch('/api/session');
+      const data = await r.json();
+      sessionEnded = !data.active;
+      updateSessionBar();
+    } catch (err) { /* ignore */ }
+  }
+
+  function updateSessionBar(endReason, summary) {
+    if (sessionEnded) {
+      els.sessionBar.classList.add('is-ended');
+      const reasonLabel = endReason
+        ? `session ended · ${endReason}`
+        : 'session ended';
+      els.sessionStatus.textContent = reasonLabel;
+    } else {
+      els.sessionBar.classList.remove('is-ended');
+      els.sessionStatus.textContent = 'session active';
+    }
+  }
+
+  function onSessionEnded(m) {
+    sessionEnded = true;
+    updateSessionBar(m.reason);
+    if (m.summary) {
+      logChat('sys', `session summary: ${m.summary}`);
+    } else {
+      logSys(`session ended (${m.reason || 'unknown'})`);
+    }
+    // Reload the memory panel — the just-closed episode is now in the list.
+    refreshMemory();
+  }
+
+  els.btnRecall.addEventListener('click', async () => {
+    if (sessionEnded) return;
+    if (!confirm("End the session and recall sweetie?")) return;
+    try {
+      await fetch('/api/session/end', { method: 'POST' });
+      // The actual end happens server-side; UI updates via session_ended bus event.
+    } catch (err) {
+      logErr(`recall failed: ${err.message}`);
+    }
+  });
 
   // ── Boot ─────────────────────────────────────────────────────────────────
   connect();

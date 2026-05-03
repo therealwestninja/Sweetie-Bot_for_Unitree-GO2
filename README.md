@@ -9,7 +9,7 @@ exists but is unverified against an actual robot.
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](#license)
-[![Tests: 303](https://img.shields.io/badge/tests-303%20passing-brightgreen.svg)](#tests)
+[![Tests: 338](https://img.shields.io/badge/tests-338%20passing-brightgreen.svg)](#tests)
 [![Status: sim-only](https://img.shields.io/badge/status-sim%20only-yellow.svg)](#hardware-integration-status)
 
 ---
@@ -39,11 +39,14 @@ Sweetie is a **single-process** application that wires four pieces together:
 Sessions are 15-30 minutes — limited by battery on the real robot, so
 designed around that constraint in sim too. Within a session, sweetie
 carries a small intention forward (`current_goal` field, `set_goal`
-tool); across sessions, no memory persists.
+tool). Across sessions, she carries forward what the supervisor has
+approved: a profile of facts she's learned and short summaries of
+recent sessions. See [Memory](#memory) below.
 
 The runtime is FastAPI + a single WebSocket per browser tab. No ROS,
-no microservices, no external state stores — at any moment, the
-entire robot's "mind" fits in one process.
+no microservices — but **state does persist** between sessions in a
+small SQLite database (`~/.sweetie/memory.db`), holding approved
+facts and episode summaries.
 
 ## Quick start
 
@@ -83,6 +86,8 @@ All knobs are environment variables. Everything has sensible defaults.
 | `SWEETIE_AUTONOMY`             | `on`          | Set to `off` to disable the autonomy loop (pure tele-op mode) |
 | `SWEETIE_AUTONOMY_IDLE_S`      | `15`          | Seconds between idle autonomy ticks |
 | `SWEETIE_AUTONOMY_COOLDOWN_S`  | `8`           | Minimum gap between any two ticks (event or idle) |
+| `SWEETIE_MEMORY`               | `on`          | Set to `off` to disable persistent memory (no DB, no cross-session recall) |
+| `SWEETIE_MEMORY_DB`            | `~/.sweetie/memory.db` | Override the SQLite path |
 
 ### Scenes
 
@@ -142,6 +147,7 @@ respond with text, with a tool call, or both.
 | `go_to_pose`      | Drive in a straight line toward (x, y), decelerating on approach        |
 | `follow_path`     | Queue a sequence of waypoints; smooth handoff between them              |
 | `set_goal`        | Set or clear sweetie's current intention; surfaced in the dashboard     |
+| `remember`        | Propose a fact to keep across sessions; supervisor approves before it lands |
 | `report_status`   | Snapshot of safety, mode, pose, proximity, vision, region, goal, recent events |
 
 All action tools route through the `SafetyGuard`. `set_goal` and
@@ -211,6 +217,84 @@ command goes through `SafetyGuard`, regardless of source.** Supervisor
 joystick, autonomy tool calls, anything — all routed through the same
 chokepoint.
 
+## Memory
+
+Sweetie remembers things across sessions through a small SQLite
+database at `~/.sweetie/memory.db` (override with `SWEETIE_MEMORY_DB`,
+disable entirely with `SWEETIE_MEMORY=off`). Two tables:
+
+- **Facts** — short statements categorized as `supervisor` (about the
+  person), `world` (about the environment), `behavior` (sweetie's own
+  habits), or `relationship` (between her and the supervisor).
+- **Episodes** — one-paragraph summaries of past sessions, with start/end
+  timestamps and an end reason (`battery_low`, `recalled`, `shutdown`,
+  `manual`).
+
+### How facts get added
+
+Sweetie can't write to her own memory unilaterally. The flow is:
+
+1. She calls the `remember` tool. The fact lands in the database with
+   `status='pending'` — invisible to her future prompts.
+2. The dashboard's memory panel shows a **pending tray** with each
+   proposal, marked by category. The supervisor can approve, reject,
+   or edit-then-approve each one — single ops or batch ("approve all").
+3. Approved facts get loaded into the system prompt at the start of
+   every future session, grouped by category.
+
+This means **the supervisor curates sweetie's long-term memory**.
+Sweetie proposes; the supervisor disposes. Pending facts persist
+across sessions until acted on, so a busy session doesn't lose
+proposals.
+
+### Honest framing
+
+The system prompt explicitly tells sweetie that her memories are
+hers — to be preferred over guessing — but that imperfect recall is
+normal. Quoting the prompt:
+
+> Prefer them over guessing. When you're not sure whether you remember
+> something specifically, say so plainly ('I think we did' / 'something
+> like that') rather than asserting facts you don't have.
+
+Some hallucination is expected and tolerated as a known limitation
+of current LLMs. The countermeasure is grounding: the more approved
+facts in the prompt, the less room for confabulation.
+
+### Session lifecycle
+
+A session starts when the server boots (a new row in `episodes`) and
+ends one of three ways:
+
+- **Battery low** — when the simulated (or real) battery drops below
+  15%, the safety FSM trips ESTOP and sweetie's session ends. A
+  reflection is written to the episode log.
+- **Supervisor recall** — the "recall sweetie" button on the dashboard
+  ends the session immediately. `POST /api/session/end`.
+- **Shutdown** — best-effort: if the server is stopped before either
+  of the above, an end-reason of `shutdown` is recorded. Reflection
+  may not run if no API key.
+
+When a session ends, autonomy detaches, sweetie writes a one-paragraph
+summary to the episode log, and the dashboard updates to show the
+end-reason and summary. No new sessions start until the server is
+restarted.
+
+### Forgetting
+
+Three ways to remove memories:
+
+- **Reject from the dashboard** — pending facts marked rejected stay
+  in the DB for audit but never load into prompts.
+- **Forget from the dashboard** — approved facts can be hard-deleted
+  with the "forget" button. Same for episodes (except the in-progress
+  one).
+- **CLI bulk-forget** — `python -m sweetie.tools.forget [--all |
+  --pending | --episodes]`. Confirmation prompt unless `--yes`.
+
+The SQLite database is human-readable; you can also `sqlite3
+~/.sweetie/memory.db` and edit directly if you want surgical control.
+
 ## Hardware integration status
 
 The `RealBridge` has been written against the documented `unitree_sdk2py`
@@ -273,7 +357,7 @@ emitting — without sending any commands. Run this before letting
 pytest
 ```
 
-303 tests, all passing as of this README. Coverage includes:
+338 tests, all passing as of this README. Coverage includes:
 
 - Safety FSM transitions, predicate ticks, proximity-aware scaling,
   battery-low and tilt auto-trip
@@ -287,9 +371,14 @@ pytest
   independence, drain semantics
 - Cognition: tool dispatch, safety integration, look_at outcomes,
   report_status structure, scene-aware system prompt, sliding-window
-  history trimming, speak-through-bridge wiring, set_goal round-trip
+  history trimming, speak-through-bridge wiring, set_goal round-trip,
+  remember tool round-trip
 - Autonomy: idle ticker, bus subscriptions, cooldown drops/releases,
   lock serializes, empty payloads dropped, detach stops idle loop
+- Memory: SQLite schema bring-up, propose/approve/reject/edit flow,
+  batch ops, episode lifecycle (start/end/idempotent close), forget
+  ops, prompt-block construction with category grouping, source-session
+  linkage, session-lifecycle integration (battery_low, recalled paths)
 - Real bridge: 25 mock-based tests against the documented SDK surface
 - Preflight diagnostic: SDK init, DDS connect, topic publishing, schema
   validation, mode-code observation
@@ -307,15 +396,17 @@ sweetie/
 │   └── bus.py               # Tiny async pub/sub.
 ├── cognition/
 │   ├── llm.py               # Anthropic client, tools, chat loop, autonomy_tick.
-│   └── autonomy.py          # Idle + event-driven primary cognition loop.
+│   ├── autonomy.py          # Idle + event-driven primary cognition loop.
+│   └── memory.py            # SQLite-backed cross-session memory (facts + episodes).
 ├── sim/
 │   ├── world.py             # Named objects + regions + scene registry (8 scenes).
 │   └── perception.py        # SimPerception: quadrants + vision FOV + occlusion.
 ├── teleop/
-│   ├── server.py            # FastAPI: /ws + /api/chat + /api/world + static UI.
+│   ├── server.py            # FastAPI: /ws + /api/chat + /api/world + /api/memory + /api/session + UI.
 │   └── static/              # The supervisor dashboard (HTML + CSS + vanilla JS).
 └── tools/
-    └── preflight.py         # Read-only hardware bring-up diagnostic.
+    ├── preflight.py         # Read-only hardware bring-up diagnostic.
+    └── forget.py            # CLI for bulk memory deletion.
 
 docs/
 ├── go2-references.md        # Cross-reference vs upstream Go2 projects.
