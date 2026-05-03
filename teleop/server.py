@@ -86,25 +86,26 @@ def _make_bridge() -> tuple[BridgeBase, World | None]:
 bridge, world = _make_bridge()
 safety = SafetyGuard()
 
-# Pass the scene name to Cognition so the system prompt accurately reflects
-# what world the LLM is in. Real-hardware mode uses the "real" prompt, which
-# tells the LLM there's no simulated world and not to fabricate one.
-_cognition_scene = (
-    "real" if os.getenv("SWEETIE_BRIDGE", "sim").lower() == "real"
-    else os.getenv("SWEETIE_SCENE", "studio")
-)
-cog = Cognition(bridge=bridge, safety=safety, scene_name=_cognition_scene)
+# Pass the World directly to Cognition. The system prompt is then built
+# from actual world contents — regions, objects, dynamic entities — so
+# the LLM never describes things that aren't there. `world` is None for
+# real hardware (RealBridge), which selects the real-hardware prompt.
+cog = Cognition(bridge=bridge, safety=safety, world=world)
 
-# Ambient cognition — opt-in via SWEETIE_AMBIENT=on. When enabled, the LLM
-# subscribes to bus events and may choose to comment unprompted.
-_ambient = None
-if os.getenv("SWEETIE_AMBIENT", "off").lower() == "on":
-    from sweetie.cognition.ambient import AmbientCognition
-    _ambient = AmbientCognition(
+# Autonomy loop — Sweetie's primary cognition path. Default on; disable
+# with SWEETIE_AUTONOMY=off (useful for tests, or for tele-op-only usage).
+# When enabled, Sweetie acts on her own — bus events trigger ticks and an
+# idle ticker fires periodically so she keeps initiative even when nothing
+# external happens.
+_autonomy = None
+if os.getenv("SWEETIE_AUTONOMY", "on").lower() != "off":
+    from sweetie.cognition.autonomy import Autonomy
+    _autonomy = Autonomy(
         cog,
-        cooldown_s=float(os.getenv("SWEETIE_AMBIENT_COOLDOWN_S", "20")),
+        idle_interval_s=float(os.getenv("SWEETIE_AUTONOMY_IDLE_S", "15")),
+        cooldown_s=float(os.getenv("SWEETIE_AUTONOMY_COOLDOWN_S", "8")),
     )
-    logger.info("Ambient cognition will be enabled at startup")
+    logger.info("Autonomy will be enabled at startup")
 
 # Active WebSocket connections (one per tab). Speak events fan out to all.
 _clients: set[WebSocket] = set()
@@ -138,24 +139,22 @@ async def lifespan(app: FastAPI):
     async def on_assist(payload: dict[str, Any]) -> None:
         await _broadcast({"type": "assist", "events": payload.get("events", [])})
 
-    async def on_ambient(payload: dict[str, Any]) -> None:
-        await _broadcast({"type": "ambient", "text": payload.get("text", "")})
-
     bus.subscribe("speak", on_speak)
     bus.subscribe("intent", on_intent)
     bus.subscribe("assist", on_assist)
-    bus.subscribe("ambient", on_ambient)
 
-    # Attach ambient cognition AFTER the broadcast subscribers exist, so
-    # any ambient utterance fired during startup correctly fans out to UIs.
-    if _ambient is not None:
-        _ambient.attach()
+    # Attach autonomy AFTER the broadcast subscribers exist, so any
+    # tick fired during startup correctly fans out to connected UIs.
+    if _autonomy is not None:
+        _autonomy.attach()
 
     try:
         yield
     finally:
         telemetry.cancel()
         safety_tick.cancel()
+        if _autonomy is not None:
+            await _autonomy.detach()
         await bridge.disconnect()
 
 
@@ -318,6 +317,11 @@ async def _telemetry_loop() -> None:
                     "state": state.to_dict(),
                     "safety": safety.to_dict(),
                     "dynamic_objects": dynamic,
+                    "current_region": (
+                        bridge.current_region()
+                        if hasattr(bridge, "current_region")
+                        else None
+                    ),
                 }
             )
         except asyncio.CancelledError:

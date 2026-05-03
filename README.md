@@ -1,14 +1,15 @@
 # sweetie
 
-A small tele-op platform for a Unitree Go2 quadruped, with a deterministic
-safety FSM, an LLM for chat and high-level intent, and a kinematic
-simulator that lets you exercise everything without hardware. **Sim-only
-today** — the real-hardware bridge exists but is unverified against an
-actual robot.
+An autonomous companion running on a Unitree Go2 quadruped — Claude-driven
+cognition, kinematic simulator for now, hardware path designed-in.
+A human supervises and may override; otherwise sweetie acts on her own:
+moves around, looks at things, comments on what she's seeing, holds
+short conversations. **Sim-only today** — the real-hardware bridge
+exists but is unverified against an actual robot.
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](#license)
-[![Tests: 298](https://img.shields.io/badge/tests-298%20passing-brightgreen.svg)](#tests)
+[![Tests: 303](https://img.shields.io/badge/tests-303%20passing-brightgreen.svg)](#tests)
 [![Status: sim-only](https://img.shields.io/badge/status-sim%20only-yellow.svg)](#hardware-integration-status)
 
 ---
@@ -17,23 +18,32 @@ actual robot.
 
 Sweetie is a **single-process** application that wires four pieces together:
 
+- An **autonomy loop** (Claude) that runs continuously during a session.
+  Bus events trigger immediate ticks; an idle ticker fires periodically
+  so sweetie keeps initiative even when nothing happens. The LLM has
+  full tool access — it can move, look, set goals, speak — and decides
+  what to do without prompting.
+- A **safety FSM** (`IDLE → ARMED → ACTIVE → ESTOP`) with proximity-aware
+  velocity scaling. Every motion command — supervisor override or
+  sweetie's own tool call — is gated through it. Same code runs in sim
+  and hardware.
 - A **simulator** of a small studio-backlot world (apartment, street,
   stairs, agility area; 38 named objects across 12 categories) that
   publishes the same state-shape as a real Go2 — pose, velocity,
   4-quadrant proximity, body height.
-- A **safety FSM** (`IDLE → ARMED → ACTIVE → ESTOP`) with proximity-aware
-  velocity scaling. Every motion command — joystick or LLM — is gated
-  through it. The same code runs against sim and hardware.
-- A **web operator console** with a top-down map, a virtual joystick, a
-  latching E-STOP, telemetry, and a chat panel.
-- An **LLM cognition layer** (Claude) with eight tools for control and
-  reporting, optional ambient commentary on bus events, and honest
-  separation between proximity (360°) and vision (forward-camera FOV +
-  occlusion).
+- A **supervisor dashboard** with a top-down map (primary), a goal strip
+  showing what sweetie is currently trying to do, a chat panel for
+  talking to her, and a collapsible override panel containing the
+  joystick, posture controls, arm/disarm, and E-STOP.
+
+Sessions are 15-30 minutes — limited by battery on the real robot, so
+designed around that constraint in sim too. Within a session, sweetie
+carries a small intention forward (`current_goal` field, `set_goal`
+tool); across sessions, no memory persists.
 
 The runtime is FastAPI + a single WebSocket per browser tab. No ROS,
-no microservices, no external state stores — at any moment, the entire
-robot's "mind" fits in one process.
+no microservices, no external state stores — at any moment, the
+entire robot's "mind" fits in one process.
 
 ## Quick start
 
@@ -43,38 +53,42 @@ cd sweetie
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-# Optional but strongly recommended:
+# Required for autonomy to actually do anything:
 cp .env.example .env
 # edit .env and add ANTHROPIC_API_KEY
 
 python -m sweetie
 ```
 
-Then open <http://127.0.0.1:8000>. Click **arm**, then drag the joystick.
-Press **space** for E-STOP at any time. Wheel-zoom and click-drag-pan
-the map (useful at high obstacle densities); the **+/−/⊙** buttons
-zoom in, out, and reset.
+Then open <http://127.0.0.1:8000>. Sweetie is autonomous by default —
+she'll start initiating ticks ~15 seconds after the bridge connects.
+Watch the goal strip below the header to see what she's working on.
+Type in the supervisor channel to talk to her; expand the override
+panel if you need to drive manually. **Spacebar = E-STOP** at any time,
+even if the override panel is collapsed.
 
 ### Configuration
 
 All knobs are environment variables. Everything has sensible defaults.
 
-| Variable                    | Default       | What it does                                                                 |
-| --------------------------- | ------------- | ---------------------------------------------------------------------------- |
-| `ANTHROPIC_API_KEY`         | _(unset)_     | Required for the cognition layer; without it `/api/chat` returns canned replies |
-| `SWEETIE_HOST` / `SWEETIE_PORT` | `127.0.0.1` / `8000` | Where the FastAPI server binds |
-| `SWEETIE_MODEL`             | `claude-sonnet-4-5` | Anthropic model name |
-| `SWEETIE_BRIDGE`            | `sim`         | `sim` (kinematic simulator) or `real` (Unitree Go2 over DDS) |
-| `SWEETIE_SCENE`             | `studio`      | `studio`/`apartment`/`street`/`stairs`/`agility`/`obstacle-sparse`/`obstacle-medium`/`obstacle-dense` (sim only) |
-| `SWEETIE_NETWORK_INTERFACE` | `eth0`        | DDS network interface (real bridge only) |
-| `SWEETIE_DDS_DOMAIN`        | `0`           | DDS domain ID (real bridge only) |
-| `SWEETIE_AMBIENT`           | `off`         | `on` enables LLM commenting unprompted on bus events |
-| `SWEETIE_AMBIENT_COOLDOWN_S`| `20`          | Minimum seconds between ambient utterances |
+| Variable                       | Default       | What it does                                                                 |
+| ------------------------------ | ------------- | ---------------------------------------------------------------------------- |
+| `ANTHROPIC_API_KEY`            | _(unset)_     | Required for cognition; without it autonomy is a no-op and `/api/chat` returns canned replies |
+| `SWEETIE_HOST` / `SWEETIE_PORT`| `127.0.0.1` / `8000` | Where the FastAPI server binds |
+| `SWEETIE_MODEL`                | `claude-sonnet-4-5` | Anthropic model name |
+| `SWEETIE_BRIDGE`               | `sim`         | `sim` (kinematic simulator) or `real` (Unitree Go2 over DDS) |
+| `SWEETIE_SCENE`                | `studio`      | `studio` / `apartment` / `street` / `stairs` / `agility` / `obstacle-sparse|medium|dense` (sim only) |
+| `SWEETIE_NETWORK_INTERFACE`    | `eth0`        | DDS network interface (real bridge only) |
+| `SWEETIE_DDS_DOMAIN`           | `0`           | DDS domain ID (real bridge only) |
+| `SWEETIE_AUTONOMY`             | `on`          | Set to `off` to disable the autonomy loop (pure tele-op mode) |
+| `SWEETIE_AUTONOMY_IDLE_S`      | `15`          | Seconds between idle autonomy ticks |
+| `SWEETIE_AUTONOMY_COOLDOWN_S`  | `8`           | Minimum gap between any two ticks (event or idle) |
 
 ### Scenes
 
 Pick one with `SWEETIE_SCENE=…`. The default `studio` is the full
-backlot; the others are focused practice areas:
+backlot; the named-area scenes are focused practice areas; the
+`obstacle-*` scenes are procedurally generated stress tests:
 
 | Scene             | Objects | Best for                                                |
 | ----------------- | -------:| ------------------------------------------------------- |
@@ -83,15 +97,37 @@ backlot; the others are focused practice areas:
 | `street`          | 16      | Static obstacle navigation: car, hydrant, lamp, cones, fence, curbs |
 | `stairs`          |  7      | Spatial reasoning around 2/3/5/8-step runs and the L-bend |
 | `agility`         |  8      | Apple boxes plus passable terrain (slope/hill/moguls/gravel) |
-| `obstacle-sparse` | 50      | Light random obstacle field — easy navigation         |
-| `obstacle-medium` | 100     | Moderate density — realistic outdoor stress test      |
-| `obstacle-dense`  | 200     | Dense field — many rocks, tight gaps, smart-assist workout |
+| `obstacle-sparse` |  50     | Light-density rock field — easy for autonomy to navigate |
+| `obstacle-medium` | 100     | Realistic outdoor density — meaningful nav planning needed |
+| `obstacle-dense`  | 200     | Stress test — proximity slowdown, vision occlusion at scale |
 
-The named-scene-registry pattern is borrowed from
-[`isaac_go2_ros2/sim_env.py`](third_party/isaac_go2_ros2/sim_env.py)
-(BSD-2-Clause, RoboVerse community).
+## How sweetie thinks
 
-## Capabilities
+The autonomy loop runs in `sweetie/cognition/autonomy.py`. Two trigger
+sources, both gated by a shared cooldown and lock:
+
+1. **Bus events.** Perception transitions, smart-assist interventions,
+   and region changes immediately schedule a tick. These are "something
+   happened, react if it matters."
+
+2. **Idle ticks.** Every `SWEETIE_AUTONOMY_IDLE_S` seconds, a tick fires
+   with trigger `"idle"`. This is the difference between a reactive
+   system and an autonomous one — without idle ticks, sweetie would
+   only think when poked.
+
+Either way, control reaches `Cognition.autonomy_tick(trigger)`, which
+synthesizes a prompt note ("autonomy tick — trigger: …") and calls
+Claude with full tool access. Claude can do nothing, speak, set or
+clear a goal, navigate, look at something, or any combination.
+
+If Claude produces no text and calls no tools, the synthetic note is
+**not** committed to history — that keeps the transcript clean across
+a 30-minute session.
+
+A typed message from the supervisor cuts in via the same `chat_lock`,
+so it can never interleave with an autonomy tick. The supervisor's
+message is just another input to the same conversation; sweetie may
+respond with text, with a tool call, or both.
 
 ### LLM tools
 
@@ -105,25 +141,27 @@ The named-scene-registry pattern is borrowed from
 | `set_body_height` | Crouch (0.18 m) or stand tall (0.34 m); default standing is 0.27 m      |
 | `go_to_pose`      | Drive in a straight line toward (x, y), decelerating on approach        |
 | `follow_path`     | Queue a sequence of waypoints; smooth handoff between them              |
-| `report_status`   | Snapshot of safety, mode, pose, proximity, vision, region, recent events |
+| `set_goal`        | Set or clear sweetie's current intention; surfaced in the dashboard     |
+| `report_status`   | Snapshot of safety, mode, pose, proximity, vision, region, goal, recent events |
 
-All action tools route through the `SafetyGuard`. `report_status` is
-read-only and always allowed.
+All action tools route through the `SafetyGuard`. `set_goal` and
+`report_status` are read/write reasoning state and skip the safety
+check.
 
 ### Two senses, distinguished
 
-The LLM can see the world two different ways and the prompt is explicit
+Sweetie can see the world two different ways and the prompt is explicit
 that they can disagree:
 
 - **Proximity (360°, no occlusion)** — `nearby_objects` and
-  `proximity_m`. The 4-quadrant ultrasonic-style sensor model. Sees in
-  every direction at once.
+  `proximity_m`. The 4-quadrant ultrasonic-style sensor model. Sees
+  in every direction at once.
 - **Vision (forward 70° cone, occluded by solid obstacles)** —
   `in_view`. The forward-camera model. A box behind the couch won't
   appear here even if it's nearby.
 
-When the operator asks "what do you see?", the LLM uses `in_view`. When
-they ask "what's around?", it uses `nearby_objects`.
+When the supervisor asks "what do you see?", sweetie uses `in_view`.
+When asked "what's around?", she uses `nearby_objects`.
 
 ### Reactive entities
 
@@ -132,51 +170,45 @@ pauses when the robot is in their walking path within ~1 m. Both
 behaviors emerge from passing the robot's pose to entities each tick;
 neither cat nor person has agency beyond that.
 
-### Ambient cognition
-
-Off by default. With `SWEETIE_AMBIENT=on`, the LLM subscribes to bus
-events (smart-assist interventions, perception transitions, region
-changes) and may comment unprompted. Strict cooldown (default 20 s)
-prevents spam. Cooldown only consumes when the LLM actually speaks —
-`(silent)` decisions don't burn the budget.
-
 ## Architecture
 
 ```
-                ┌─────────────────────────────────┐
-                │  Web operator console (browser) │
-                │  joystick · map · chat · E-STOP │
-                └──────────────┬──────────────────┘
+              ┌──────────────────────────────────────┐
+              │  Supervisor dashboard (browser)      │
+              │  goal strip · map · chat · override  │
+              └────────────────┬─────────────────────┘
                                │  WebSocket + REST
-                ┌──────────────▼──────────────────┐
-   ┌──────┐    │       FastAPI server (one process)
-   │ LLM  │◄──►│  ┌──────────────────────────────┐ │
-   │(Claude)│  │  │     Cognition (chat + tools) │ │
-   └──────┘   │  └────────┬─────────────┬───────┘ │
-              │           │             │         │
-              │  ┌────────▼─┐    ┌──────▼─────┐  │
-              │  │ Safety   │    │  Bus       │  │
-              │  │  guard   │    │  pub/sub   │  │
-              │  └────────┬─┘    └──────┬─────┘  │
-              │           │             │         │
-              │   ┌───────▼─────────────▼──────┐ │
-              │   │     BridgeBase (interface) │ │
-              │   ├────────────────────────────┤ │
-              │   │ SimBridge        RealBridge│ │
-              │   │ (kinematic)      (Go2 DDS) │ │
-              │   └────┬───────────────────────┘ │
-              │        │                         │
-              │   ┌────▼──────┐    ┌──────────┐  │
-              │   │   World   │    │ Perception│ │
-              │   │  + scenes │    │  (FOV +   │ │
-              │   │  + regions│    │ occlusion)│ │
-              │   └───────────┘    └──────────┘  │
-              └──────────────────────────────────┘
+              ┌────────────────▼─────────────────────┐
+   ┌──────┐   │       FastAPI server (one process)
+   │ LLM  │◄──┤  ┌───────────────────────────────┐  │
+   │(Claude)│  │  │   Autonomy (idle + events)   │  │
+   └──────┘   │  │   ↓ autonomy_tick(trigger)    │  │
+              │  │   Cognition (chat + tools)    │  │
+              │  └────────┬─────────────┬────────┘  │
+              │           │             │           │
+              │  ┌────────▼─┐     ┌─────▼──────┐    │
+              │  │ Safety   │     │  Bus       │    │
+              │  │  guard   │     │  pub/sub   │    │
+              │  └────────┬─┘     └──────┬─────┘    │
+              │           │              │          │
+              │   ┌───────▼──────────────▼───────┐  │
+              │   │     BridgeBase (interface)   │  │
+              │   ├──────────────────────────────┤  │
+              │   │ SimBridge          RealBridge│  │
+              │   │ (kinematic)        (Go2 DDS) │  │
+              │   └────┬─────────────────────────┘  │
+              │        │                            │
+              │   ┌────▼──────┐    ┌──────────┐     │
+              │   │   World   │    │ Perception│    │
+              │   │  + scenes │    │  (FOV +   │    │
+              │   │  + regions│    │ occlusion)│    │
+              │   └───────────┘    └──────────┘     │
+              └──────────────────────────────────────┘
 ```
 
-The single most important architectural decision: **every command goes
-through `SafetyGuard`, regardless of source.** Joystick, LLM tool calls,
-ambient utterances proposing actions — all routed through the same
+The single most important architectural decision: **every motion
+command goes through `SafetyGuard`, regardless of source.** Supervisor
+joystick, autonomy tool calls, anything — all routed through the same
 chokepoint.
 
 ## Hardware integration status
@@ -192,11 +224,10 @@ What's verified by tests:
 - Wire protocol: DDS topic names (`rt/sportmodestate`, `rt/lowstate`)
   match upstream schemas
 - Architectural seams: `RealBridge` implements `BridgeBase` cleanly;
-  safety guard, cognition, and operator UI work identically against
-  either bridge
+  safety guard, autonomy, dashboard work identically against either bridge
 - `RealPerception` generates proximity-quadrant transition events from
   the live `range_obstacle` field with hysteresis; same event shape
-  the cognition layer sees from `SimPerception`
+  cognition sees from `SimPerception`
 - Failure modes: commands before `connect()` return False, SDK errors
   return False, missing SDK gives a clear actionable error
 
@@ -209,12 +240,10 @@ What is NOT verified, and what's deliberately not yet implemented:
 - Timing/latency assumptions
 - Real-hardware navigation: `go_to_pose` and `follow_path` are
   **deliberately refused** on `RealBridge` — there's no perception or
-  planner on hardware yet, so driving blindly toward a coordinate
-  would be unsafe
+  planner on hardware yet
 - Audio hub TTS: the `speak_through_robot` seam exists on `RealBridge`
-  but the audio block encoding is unimplemented (needs an external
-  TTS engine + chunked SEND_AUDIO_BLOCK sequencing). `speak` falls
-  back to the chat panel cleanly.
+  but the audio block encoding is unimplemented. `speak` falls back to
+  the chat panel cleanly.
 - Camera frames + semantic detection: `RealPerception.vision_summary()`
   returns `[]` honestly; an on-board model or external service would
   fill that in.
@@ -234,9 +263,9 @@ python -m sweetie.tools.preflight --interface eth0 --domain 0
 ```
 
 It checks SDK import, DDS init, topic publishing on `rt/sportmodestate`
-and `rt/lowstate`, and observes mode codes the robot is actually emitting
-— without sending any commands. Run this before letting `RealBridge`
-issue motion commands. Exit code 0 = all checks passed.
+and `rt/lowstate`, and observes mode codes the robot is actually
+emitting — without sending any commands. Run this before letting
+`RealBridge` issue motion commands. Exit code 0 = all checks passed.
 
 ## Tests
 
@@ -244,7 +273,7 @@ issue motion commands. Exit code 0 = all checks passed.
 pytest
 ```
 
-298 tests, all passing as of this README. Coverage includes:
+303 tests, all passing as of this README. Coverage includes:
 
 - Safety FSM transitions, predicate ticks, proximity-aware scaling,
   battery-low and tilt auto-trip
@@ -255,14 +284,15 @@ pytest
   reactive flee/yield, scene registry, regions, procedural obstacle fields
 - SimPerception: quadrant transitions, FOV cone, occlusion, vision events
 - RealPerception: hysteresis, near/far thresholds, per-quadrant
-  independence, drain semantics, empty vision summary
+  independence, drain semantics
 - Cognition: tool dispatch, safety integration, look_at outcomes,
   report_status structure, scene-aware system prompt, sliding-window
-  history trimming, speak-through-bridge wiring
+  history trimming, speak-through-bridge wiring, set_goal round-trip
+- Autonomy: idle ticker, bus subscriptions, cooldown drops/releases,
+  lock serializes, empty payloads dropped, detach stops idle loop
 - Real bridge: 25 mock-based tests against the documented SDK surface
 - Preflight diagnostic: SDK init, DDS connect, topic publishing, schema
   validation, mode-code observation
-- Ambient: cooldown, lock, silent-response handling, bus subscription
 
 ## Layout
 
@@ -276,41 +306,37 @@ sweetie/
 │   ├── safety.py            # FSM + command guard. Single source of truth.
 │   └── bus.py               # Tiny async pub/sub.
 ├── cognition/
-│   ├── llm.py               # Anthropic client, tools, chat loop, ambient_react.
-│   └── ambient.py           # Bus-event-driven unprompted commentary (opt-in).
+│   ├── llm.py               # Anthropic client, tools, chat loop, autonomy_tick.
+│   └── autonomy.py          # Idle + event-driven primary cognition loop.
 ├── sim/
 │   ├── world.py             # Named objects + regions + scene registry (8 scenes).
 │   └── perception.py        # SimPerception: quadrants + vision FOV + occlusion.
 ├── teleop/
 │   ├── server.py            # FastAPI: /ws + /api/chat + /api/world + static UI.
-│   └── static/              # The operator console (HTML + CSS + vanilla JS).
+│   └── static/              # The supervisor dashboard (HTML + CSS + vanilla JS).
 └── tools/
     └── preflight.py         # Read-only hardware bring-up diagnostic.
 
 docs/
 ├── go2-references.md        # Cross-reference vs upstream Go2 projects.
 └── hardware-bringup.md      # Step-by-step first-Go2 procedure (speculative).
-
-third_party/
-├── go2_ros2_sdk/        # BSD-2 reference: WebRTC SDK, sport mode IDs.
-├── go2_omniverse/       # BSD-2 reference: Isaac Sim terrain configs.
-├── isaac_go2_ros2/      # BSD-2 reference: ROS2 sim integration.
-└── unitree_go2_nav/     # BSD-2 reference: Nav2 integration.
 ```
+
+The `teleop/` directory is named for historical reasons — it's the
+dashboard server, not a tele-op-only thing. Renaming it is a roadmap
+item, not yet done.
 
 ## Reference materials
 
 [`docs/go2-references.md`](docs/go2-references.md) cross-references
-sweetie's `RealBridge` against four BSD-2-Clause community projects
-(sport mode API IDs, DDS topic names, mode-code mapping, ROS2
-conventions). The upstream files are preserved verbatim under
-`third_party/`, with their original copyright headers and LICENSE files
-intact. Start there if you're bringing this up on real hardware.
+sweetie's `RealBridge` against four BSD-2-Clause community projects.
+The upstream files are preserved verbatim under `third_party/`, with
+their original copyright headers and LICENSE files intact.
 
 ## Roadmap
 
-See [`ROADMAP.md`](ROADMAP.md) for what's planned and what's deliberately
-out of scope.
+See [`ROADMAP.md`](ROADMAP.md) for what's planned and what's
+deliberately out of scope.
 
 ## License
 

@@ -1,9 +1,8 @@
 # Roadmap
 
-What's shipped, what's planned, what isn't in scope. Items aren't versioned
-because the project's milestone numbers stopped being meaningful around
-M5 — too many small additions to keep numbering tidy. Categories are
-more useful than version numbers anyway.
+What's shipped, what's planned, what isn't in scope. Items aren't
+versioned because the project's milestone numbers stopped being
+meaningful around M5.
 
 ## Status legend
 
@@ -13,7 +12,36 @@ more useful than version numbers anyway.
 - 🚫 **Out of scope** — considered, declined; reasons given so future
   contributors don't re-litigate.
 
+## The product, plainly
+
+Sweetie is an **autonomous companion** running on a Go2: she initiates,
+acts, comments, and converses without prompting. A human supervises and
+can override but is not in the driving loop. Sessions are 15-30 minutes
+(battery-bound). The earlier "tele-op platform" framing was wrong; the
+codebase has been re-shaped to match the actual product.
+
+What this means for the roadmap:
+
+- "Autonomy" is the primary capability area, not a feature.
+- "Supervisor override" is the human's role; the joystick and arm
+  buttons exist to support that, not as the main user surface.
+- Hardware bring-up matters because that's where sweetie *lives*. Sim
+  is for development and testing.
+
 ## Capability matrix
+
+### Autonomy
+
+| Item                                      | Status    | Notes                                                      |
+| ----------------------------------------- | --------- | ---------------------------------------------------------- |
+| Idle + event-driven autonomy loop         | ✅       | `Autonomy` orchestrator runs default-on; idle every 15s, event triggers cut in |
+| Full tool access in autonomy ticks        | ✅       | `autonomy_tick(trigger)` with the same toolset as `chat()` |
+| Current goal state (`set_goal` tool)      | ✅       | Carries intention forward across ticks; visible on dashboard |
+| Conversation continuity within a session  | ✅       | Sliding-window history, supervisor messages and autonomy ticks share the same transcript |
+| Cooldown protection                       | ✅       | Prevents tick thrashing (8s default, tunable)              |
+| Multi-step planning beyond one tool chain | ⏳       | LLM picks tool sequences within a tick; cross-tick plans are emergent only |
+| Cross-session memory                      | 🚫       | Out of scope — sessions are 15-30 min, no persistence story makes sense |
+| Learning from supervisor feedback         | ⏳       | Future work; would require feedback affordances we don't have yet |
 
 ### Control & safety
 
@@ -31,15 +59,16 @@ more useful than version numbers anyway.
 
 | Item                                      | Status    | Notes                                                      |
 | ----------------------------------------- | --------- | ---------------------------------------------------------- |
-| Velocity-command joystick (vx, vy, vyaw)  | ✅       | Drag UI + WS protocol                                       |
-| `stand_up` / `stand_down`                 | ✅       | Both as LLM tools and operator buttons                     |
-| `halt` (motion stop, stay armed)          | ✅       | LLM tool; always allowed                                   |
+| Velocity-command joystick (vx, vy, vyaw)  | ✅       | Drag UI + WS protocol — supervisor override channel        |
+| `stand_up` / `stand_down`                 | ✅       | Both autonomy tools and override buttons                   |
+| `halt` (motion stop, stay armed)          | ✅       | Always allowed                                             |
 | `look_at_entity` (closed-loop yaw)        | ✅       | Targets named world objects                                |
 | `set_body_height` (crouch/tall, 0.18-0.34 m) | ✅    | LLM tool; clamped, not rejected                            |
 | `go_to_pose(x, y)` (straight-line nav)    | ✅       | Smooth deceleration, cancellable; no path-planning         |
-| Real-hardware nav (Nav2 + costmap)        | ⏳       | `RealBridge.go_to_pose` deliberately refuses for safety    |
-| Gait switching (walk/trot/bound)          | ⏳       | API IDs known; no use case yet                             |
-| Trajectory following / waypoint sequences | ✅       | `follow_path([(x,y), ...])` queues over `go_to_pose`; smooth handoff |
+| `follow_path([(x,y), ...])` (waypoints)   | ✅       | Queued nav with smooth handoff                              |
+| Real-hardware nav (Nav2 + costmap)        | ⏳       | `go_to_pose`/`follow_path` deliberately refuse on `RealBridge` until perception + planner exist |
+| Gait switching (walk/trot/bound)          | ⏳       | API IDs known; mostly aesthetic without physics             |
+| Tour-style multi-region exploration       | ⏳       | Composition over `follow_path`; autonomy could already do this with prompting, structural support deferred |
 
 ### Perception & vision
 
@@ -49,8 +78,8 @@ more useful than version numbers anyway.
 | Quadrant-transition events                | ✅       | Filtered to "interesting" (range entry/exit, into-front)   |
 | Forward-camera FOV cone (70°)             | ✅       | Sim-only; ground-truth shortcut                            |
 | Ray-traced occlusion                      | ✅       | Solid obstacles block sight; passable terrain doesn't      |
-| Vision-entry/exit events                  | ✅       | Streamed to bus for ambient cognition                      |
-| Real-camera detector / tracker            | 🟡       | `PerceptionBase` interface exists; no `RealPerception` yet |
+| Vision-entry/exit events                  | ✅       | Streamed to bus for autonomy reactions                     |
+| Real-camera detector / tracker            | 🟡       | `RealPerception` ships proximity-only events; semantic detector still needed |
 | Lidar voxel-map decoding                  | ⏳       | Upstream decoder shape known (BSD-2 reference); not adopted |
 | Semantic segmentation                     | ⏳       | Sim could fake; real-hardware would need an external model |
 | Depth from camera                         | ⏳       | Real Go2 RealSense publishes depth; not consumed yet       |
@@ -63,24 +92,24 @@ more useful than version numbers anyway.
 | Reactive entities (cat flee, person yield) | ✅      | Both via `update(dt, observer)` hook                       |
 | Studio-backlot scene (apartment + street + stairs + agility) | ✅ | Default `SWEETIE_SCENE=studio`           |
 | Focused practice scenes                   | ✅       | `apartment` / `street` / `stairs` / `agility`              |
-| Named regions with zone-change events     | ✅       | Bus topic `zone_changed`; surfaced in `report_status`      |
+| Procedurally generated obstacle fields    | ✅       | Sparse / medium / dense — for autonomy stress-testing      |
+| Named regions with zone-change events     | ✅       | Bus topic `zone_changed`; surfaced in dashboard            |
 | Apple boxes (full / half / quarter / eighth) | ✅    | Standard film-industry stage props                         |
 | Stairs (2/3/5/8-step + L-bend)            | ✅       | Spatially represented; not physically simulated            |
 | Slopes / hills / moguls / gravel          | ✅       | Passable terrain; not physically simulated                 |
 | Entity goals beyond reactive              | ⏳       | Cat to-rug, person-with-errands; mostly polish             |
 | Multi-floor scenes                        | 🚫       | Out of scope: no Z axis. See "kinematic vs physics" below  |
-| Procedurally generated obstacle fields    | ✅       | `obstacle-sparse` (50), `obstacle-medium` (100), `obstacle-dense` (200); pattern from `isaac_go2_ros2/sim_env.py` |
 
 ### Cognition
 
 | Item                                      | Status    | Notes                                                      |
 | ----------------------------------------- | --------- | ---------------------------------------------------------- |
-| Reactive chat (Claude as operator co-pilot) | ✅      | 8 tools; all gated by `SafetyGuard`                        |
-| Tool calls visible to operator            | ✅       | "do" / "do✗" lines in chat                                 |
-| `report_status` snapshot (proximity, vision, region, perception, assists) | ✅ | Single read-only window |
-| Ambient cognition (LLM speaks unprompted) | ✅       | Opt-in via `SWEETIE_AMBIENT=on`; cooldown-protected        |
-| Scene-aware system prompt                 | ✅       | Built from live `World` — no hallucinated objects, dynamic-entity guidance only when relevant |
+| LLM (Claude) as the primary mind          | ✅       | All decisions route through `autonomy_tick` or `chat()`    |
+| 9 tools: motion, posture, navigation, perception, goals, speech | ✅ | All gated by `SafetyGuard` where motion-affecting           |
+| Autonomy-initiated speech distinct from prompted | ✅ | `chat-autonomy` line variant in dashboard                  |
+| Scene-aware system prompt                 | ✅       | Built from world contents; doesn't fabricate              |
 | Sliding-window history (token budget)     | ✅       | Trim threshold 50 → target 30 messages; respects tool_use/tool_result pairing |
+| Onboard / offboard split                  | ⏳       | Currently one Claude call per tick; future split may put a fast onboard policy in front of Claude for routine decisions |
 | Multi-LLM (e.g. local model fallback)     | 🚫       | Out of scope: keeps the architecture simple                |
 
 ### Real hardware
@@ -90,24 +119,39 @@ more useful than version numbers anyway.
 | `RealBridge` (DDS over `unitree_sdk2py`)  | 🟡       | Code exists, **not runtime-tested** against a Go2          |
 | Sport mode commands (StandUp/Down/Move/Damp etc.) | 🟡 | Mock-tested integration shape; needs hardware verification |
 | `BodyHeight` SDK call                     | 🟡       | Wired to `set_body_height`; absolute → relative offset     |
-| Pre-flight bring-up diagnostic (`python -m sweetie.tools.preflight`) | ✅ | Read-only SDK/DDS/topic check; runs without sending commands |
+| Pre-flight bring-up diagnostic            | ✅       | `python -m sweetie.tools.preflight` — read-only            |
 | WebRTC transport (alternative to DDS)     | 🚫       | Reference materials kept; transport choice is firmly DDS   |
-| Audio hub (TTS through robot speaker)     | ⏳       | API IDs known (`AUDIO_HUB_COMMANDS`)                       |
-| Camera frame ingestion                    | ⏳       | Required prerequisite for real perception                  |
-| First-time hardware bring-up checklist    | ⏳       | Most important open item once a robot is available         |
+| Audio hub (TTS through robot speaker)     | 🟡       | Bridge seam wired (`speak_through_robot`); audio block encoding unimplemented |
+| Camera frame ingestion                    | ⏳       | Required prerequisite for real semantic vision              |
+| First-time hardware bring-up doc          | ✅       | See [`docs/hardware-bringup.md`](docs/hardware-bringup.md) — speculative until run |
 
-### Operator UX
+### Supervisor dashboard
 
 | Item                                      | Status    | Notes                                                      |
 | ----------------------------------------- | --------- | ---------------------------------------------------------- |
-| Top-down map with category-aware styling  | ✅       | Stairs dashed, terrain striped, cones orange, etc.         |
-| Live dynamic-entity tracking on map       | ✅       | Cat and person update each telemetry frame                 |
-| Chat panel with tool-call visibility      | ✅       | "do" / "spk" / "assist" / "ambient" line variants           |
-| Joystick + heartbeat                      | ✅       | Slows/centers on inactivity                                 |
-| Spacebar E-STOP                           | ✅       | Always works                                                |
-| Map zoom / pan controls                   | ✅       | Wheel zoom (cursor-anchored), drag pan, +/-/0 keys, button overlay |
-| Persistent operator settings              | ⏳       | No state survives restart                                   |
-| Mobile-friendly UI                        | 🚫       | Tele-op needs a real screen and keyboard                   |
+| Top-down map (primary surface)            | ✅       | Category-aware styling; live dynamic-entity tracking       |
+| Goal strip (current sweetie intention)    | ✅       | Updated from `set_goal` tool calls                         |
+| Region badge (current region)             | ✅       | In header status strip                                     |
+| Supervisor chat channel                   | ✅       | Distinct chat-line variants for autonomy-initiated vs. supervisor-prompted |
+| Override panel (joystick + posture + arm + E-STOP) | ✅ | Collapsed by default; spacebar E-STOP works regardless     |
+| Map zoom / pan controls                   | ✅       | Wheel zoom (cursor-anchored), drag pan, +/-/0 keys         |
+| Persistent supervisor settings            | ⏳       | No state survives restart                                   |
+| Mobile-friendly UI                        | 🚫       | Supervisor needs a real screen and keyboard                |
+
+### Sim-to-real transition
+
+This is its own category because it's the path from "speculative" to
+"shipped" for the real-hardware capabilities.
+
+| Item                                      | Status    | Notes                                                      |
+| ----------------------------------------- | --------- | ---------------------------------------------------------- |
+| Sim and real bridges share `BridgeBase`   | ✅       | Same toolset, same safety, same dashboard                  |
+| Hardware bring-up checklist               | ✅       | `docs/hardware-bringup.md` — needs a real Go2 to validate  |
+| First-pass bring-up against a real Go2    | ⏳       | The single highest-leverage open item                      |
+| Mode-code calibration on real hardware    | ⏳       | Documented as preflight step; will produce concrete values to update `RealBridge._mode_to_str` |
+| Audio block format discovery              | ⏳       | Sample rate / encoding / chunk size for `SEND_AUDIO_BLOCK` — undocumented in BSD-2 references |
+| Camera frame subscription                 | ⏳       | Subscribe to RealSense topics; required for real semantic vision |
+| Real-hardware Nav2 integration            | ⏳       | Multi-week project; out of scope for sweetie itself, sweetie hands off |
 
 ## What's deliberately not in scope
 
@@ -117,17 +161,20 @@ Re-litigate only with new information.
 - **Multi-process / microservices.** The whole point is one process,
   one event loop, one chokepoint. Splitting cognition into its own
   service would buy isolation we don't need and complicate the safety
-  story — actions could land out-of-order with respect to telemetry.
+  story.
 - **External state stores.** No Redis, no Postgres, no SQLite. State
   lives in the running process. If you want persistence, log the
   WebSocket traffic.
-- **Behaviour trees / planners.** The LLM is the planner. Adding a
-  separate BT layer would create two minds with different opinions
-  about what to do next. The safety FSM is enough.
+- **Behaviour trees / planners as a separate layer.** The LLM is the
+  planner. Adding a separate BT layer would create two minds with
+  different opinions about what to do next. The safety FSM is enough.
 - **Custom RL controllers.** Real Go2 firmware ships with its own
   controllers and the SportClient wraps them. We don't need to ship
   policies; we just need to drive the SportClient correctly.
-- **Multiple operators per session.** Authentication, conflict
+- **Cross-session memory / learning across sessions.** Sessions are
+  15-30 minutes. Memory across sessions is a different product
+  (assistant, not companion).
+- **Multiple supervisors per session.** Authentication, conflict
   resolution, role permissions — all real work, no use case yet.
 - **Recording/replay system.** Useful eventually, but not until first
   hardware bring-up exposes the things actually worth replaying.
@@ -136,83 +183,44 @@ Re-litigate only with new information.
 
 Sweetie's simulator is **kinematic** — it integrates commanded velocity
 into pose with no Z axis, no foot dynamics, no contact forces. That
-keeps it cheap (50 Hz tick, ~5 ms per integration step), tests fast,
-and the architecture clean.
+keeps it cheap, tests fast, the architecture clean.
 
 The cost is honesty: stairs and terrain are *represented* on the map
 and named for navigation/conversation, but the robot doesn't actually
-traverse them. The LLM is told this explicitly in the system prompt.
+traverse them. Sweetie is told this in her system prompt.
 
-The decision point is whether to add a physics layer (likely MuJoCo,
-borrowed from `go2_omniverse` patterns). It would unlock:
-
-- Actual stair traversal — the Go2's defining capability
-- Slope handling, mogul recovery, gravel slip
-- Tipping / falling / recovery behaviors that justify ESTOP-on-tilt
-- Foot contact forces useful to a future RL controller
-
-Costs:
-
-- Significant new dependency
-- Tests that take seconds, not milliseconds
-- A rabbit hole: physics needs URDF, URDF needs joint configuration,
-  joint config needs gait parameters, gait parameters need an RL
-  policy, the RL policy needs training, ad infinitum
-- Most of what we currently test (safety FSM, smart-assist, perception
-  events, ambient cognition) doesn't benefit
+The decision point is whether to add a physics layer (likely MuJoCo).
+It would unlock actual stair traversal, slope handling, tipping
+recovery, etc. Costs: significant new dependency, slower tests, and a
+rabbit hole of URDF / gait / RL training.
 
 The honest position: **kinematic is enough until hardware bring-up
-proves otherwise.** If/when a real Go2 is available and the bring-up
-checklist exposes specific issues that need physics in sim to debug,
-that's the right time to add MuJoCo. Speculatively building it before
-then would slow everything else for no clear gain.
+proves otherwise.** Most of what we currently test (safety FSM,
+smart-assist, perception events, autonomy) doesn't benefit from
+physics in sim.
 
-## Hardware bring-up checklist (sketch)
+## Hardware bring-up
 
-When a Go2 is available, this is the rough order of operations. Don't
-treat as authoritative; revise on contact with reality.
+Step-by-step procedure for the first time someone has a Go2 to plug
+in: [`docs/hardware-bringup.md`](docs/hardware-bringup.md). It's
+**speculative until somebody runs it** — every step makes assumptions
+that only hardware can confirm. The doc opens with explicit guidance
+on revising it from experience.
 
-1. **Network and DDS.** Start with `python -m sweetie.tools.preflight
-   --interface <iface> --domain <id>`. It's read-only: confirms SDK
-   imports, DDS initializes, and `/rt/sportmodestate` + `/rt/lowstate`
-   are publishing the fields we expect. If preflight fails, sweetie's
-   `RealBridge` will fail too — fix here first.
+The high-level flow:
 
-2. **`unitree_sdk2py` install.** `pip install -e .[real]` may not work
-   if the upstream package isn't on PyPI in your region; fall back to
-   the GitHub URL. Verify imports in a Python REPL before running
-   sweetie.
-
-3. **Static state subscription only.** First boot with everything
-   commanded disabled: `SWEETIE_BRIDGE=real` but no STAND_UP, no MOVE.
-   Confirm `RobotState` populates correctly on telemetry.
-
-4. **Mode-code calibration.** Log every distinct `mode` value seen
-   over a few minutes of normal robot operation. Update
-   `RealBridge._mode_to_str` if the values disagree with our table.
-
-5. **Safe-side commands.** `stand_up` and `stand_down` first. Watch
-   for SDK error returns. Map them to clean reject reasons in our
-   logs.
-
-6. **`Damp()` test in safe space.** Critical: verify emergency_stop()
-   actually does what we want (joints compliant, robot settles softly).
-
-7. **`Move()` at low velocity.** 0.1 m/s forward only. Check that
-   safety guard's slowdown still applies. Verify the proximity readings
-   come from the robot's own sensors, not our cached zeros.
-
-8. **`BodyHeight` calibration.** Confirm the absolute → relative offset
-   conversion in `RealBridge.set_body_height` matches what the SDK
-   expects. The default is 0.27 m offset from 0.0; if the SDK takes a
-   different baseline, adjust.
-
-9. **`go_to_pose` deferred.** Stays refused on `RealBridge` until a
-   real perception layer (camera + vision) and a planner exist.
-   Anything else is pretending.
-
-10. **Update the README.** Once hardware-verified, change the badge
-    from `sim only` to `hardware-tested`. Document what was different.
+- **Phase 0** — preparation (kill switch, floor space, full battery)
+- **Phase 1** — preflight (`python -m sweetie.tools.preflight`)
+- **Phase 2** — telemetry-only sweetie boot (verify everything you can
+  read before sending anything)
+- **Phase 3** — Damp / E-STOP first (before any motion command)
+- **Phase 4-5** — stand-up/down, body height (low-risk SDK calls)
+- **Phase 6-7** — low-velocity move + smart-assist on real proximity
+- **Phase 8** — tilt and battery auto-trip
+- **Phase 9** — what to expect from compositional tools (`look_at`,
+  `go_to_pose`, `follow_path` — all deliberately reduced on hardware)
+- **Phase 10** — what's still unimplemented (audio hub, camera, Nav2)
+- **Phase 11** — update sweetie based on what surprised you
 
 ## Cross-references
 

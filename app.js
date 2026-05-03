@@ -8,6 +8,7 @@
     conn:    $('stat-conn'),
     safety:  $('stat-safety'),
     mode:    $('stat-mode'),
+    region:  $('stat-region'),
     batt:    $('stat-batt'),
     pose:    $('stat-pose'),
     vel:     $('stat-vel'),
@@ -22,6 +23,12 @@
     brand:   document.querySelector('.brand-mark'),
     mapObjects: $('map-objects'),
     mapRobot: $('map-robot'),
+    map:        $('map'),
+    zoomIn:     $('zoom-in'),
+    zoomOut:    $('zoom-out'),
+    zoomFit:    $('zoom-fit'),
+    goalStrip:  $('goal-strip'),
+    goalValue:  $('goal-value'),
   };
 
   // World data, fetched once on connect. Shape: { objects: [...] }
@@ -72,6 +79,7 @@
       case 'speak':      logChat('spk', m.text); pulseBrand(); break;
       case 'intent':     logIntent(m); pulseBrand(); break;
       case 'assist':     logAssist(m); pulseBrand(); break;
+      case 'autonomy':   logChat('autonomy', m.text); pulseBrand(); break;
       case 'estop':      logSys('E-STOP latched'); pulseBrand(); break;
       case 'rejected':   logErr(`command rejected: ${m.reason}`); break;
       case 'ack':        markEvent(`ack:${m.of}=${m.ok ? 'ok' : 'fail'}`); break;
@@ -84,6 +92,24 @@
   }
 
   function logIntent({ action, outcome, reason }) {
+    // set_goal is special — it both updates the goal strip and emits
+    // a dedicated chat-line variant (not a generic intent line).
+    if (action === 'set_goal') {
+      if (outcome === 'ok' && reason) {
+        setCurrentGoal(reason);
+        logChat('goal-set', reason);
+      } else if (outcome === 'cleared') {
+        setCurrentGoal(null);
+        logChat('goal-cleared', reason || '(prior goal)');
+      } else if (outcome === 'noop') {
+        // Tried to clear when nothing was set — silent, no log entry
+      } else {
+        // Error case (rare; set_goal is always allowed)
+        logChat('intent-rej', `set_goal ✗ ${outcome}: ${reason || ''}`);
+      }
+      return;
+    }
+
     // outcome is one of: ok | rejected | no-op | error
     const kindByOutcome = {
       ok: 'intent-ok',
@@ -102,8 +128,18 @@
     }
   }
 
+  function setCurrentGoal(goal) {
+    if (goal && goal.trim()) {
+      els.goalValue.textContent = goal;
+      els.goalStrip.classList.remove('is-empty');
+    } else {
+      els.goalValue.textContent = 'no active goal';
+      els.goalStrip.classList.add('is-empty');
+    }
+  }
+
   // ── Telemetry → DOM ──────────────────────────────────────────────────────
-  function applyTelemetry({ state, safety, dynamic_objects }) {
+  function applyTelemetry({ state, safety, dynamic_objects, current_region }) {
     const safetyState = safety.state;
     let cls = 'info';
     if (safetyState === 'active') cls = 'ok';
@@ -118,6 +154,8 @@
     els.knob.classList.toggle('is-disarmed', !armed);
 
     setStat('mode', state.mode, state.mode === 'estop' ? 'err' : null);
+    setStat('region', current_region || '—',
+            current_region ? null : 'info');
     const pct = state.battery_percent.toFixed(1) + '%';
     setStat('batt', pct, state.battery_percent < 20 ? 'err' : null);
 
@@ -152,7 +190,11 @@
     els.mapObjects.replaceChildren();
     for (const o of world.objects) {
       const g = document.createElementNS(NS, 'g');
-      g.setAttribute('class', `map-object${o.dynamic ? ' is-dynamic' : ''}`);
+      const classes = ['map-object'];
+      if (o.dynamic) classes.push('is-dynamic');
+      if (o.category) classes.push(`cat-${o.category.replace(/[^a-z]/gi, '_')}`);
+      if (o.obstacle === false) classes.push('passable');
+      g.setAttribute('class', classes.join(' '));
       g.setAttribute('data-name', o.name);
       g.setAttribute('transform', `translate(${o.x}, ${-o.y})`);
 
@@ -161,14 +203,21 @@
       c.setAttribute('cx', '0');
       c.setAttribute('cy', '0');
       // Items with radius 0 (e.g. the rug) still want a tiny visible mark.
-      c.setAttribute('r', String(Math.max(o.radius, 0.08)));
+      c.setAttribute('r', String(Math.max(o.radius, 0.10)));
       g.appendChild(c);
 
-      const t = document.createElementNS(NS, 'text');
-      t.setAttribute('x', '0');
-      t.setAttribute('y', String(-(Math.max(o.radius, 0.08) + 0.12)));
-      t.textContent = o.name;
-      g.appendChild(t);
+      // Only label "important" things to keep the map from getting cluttered.
+      // Curbs, fence posts, etc. get position only — their identity comes
+      // from context (a row of dots = a curb).
+      const labelable = ['furniture', 'animal', 'person', 'fixture',
+                         'vehicle', 'stairs', 'terrain', 'prop'];
+      if (labelable.includes(o.category) || o.dynamic) {
+        const t = document.createElementNS(NS, 'text');
+        t.setAttribute('x', '0');
+        t.setAttribute('y', String(-(Math.max(o.radius, 0.10) + 0.18)));
+        t.textContent = o.name;
+        g.appendChild(t);
+      }
 
       els.mapObjects.appendChild(g);
     }
@@ -199,11 +248,11 @@
     const body = document.createElementNS(NS, 'circle');
     body.setAttribute('cx', '0');
     body.setAttribute('cy', '0');
-    body.setAttribute('r', '0.18');
+    body.setAttribute('r', '0.30');
     g.appendChild(body);
     // pointing triangle
     const tri = document.createElementNS(NS, 'polygon');
-    tri.setAttribute('points', '0.30,0  -0.10,0.14  -0.10,-0.14');
+    tri.setAttribute('points', '0.50,0  -0.18,0.24  -0.18,-0.24');
     g.appendChild(tri);
     els.mapRobot.appendChild(g);
   }
@@ -310,7 +359,111 @@
       send({ type: 'estop' });
       markEvent('estop (kbd)');
     }
+    // Map zoom shortcuts — only when not typing in the chat box.
+    if (document.activeElement === els.chatText) return;
+    if (e.code === 'Equal' || e.code === 'NumpadAdd') {
+      e.preventDefault();
+      zoomMap(1 / 1.25);          // bigger view = smaller box (zoom IN)
+    } else if (e.code === 'Minus' || e.code === 'NumpadSubtract') {
+      e.preventDefault();
+      zoomMap(1.25);
+    } else if (e.code === 'Digit0' || e.code === 'Numpad0') {
+      e.preventDefault();
+      resetMapView();
+    }
   });
+
+  // ── Map zoom / pan ──────────────────────────────────────────────────────
+  //
+  // ViewBox is `[x, y, w, h]` in world-meter units. Default is the
+  // `-10 -10 20 20` square set in HTML. Wheel scales centred on cursor;
+  // drag pans by translating origin by the cursor delta in world units.
+
+  const DEFAULT_VIEW = [-10, -10, 20, 20];
+  let view = [...DEFAULT_VIEW];
+
+  function applyView() {
+    els.map.setAttribute('viewBox', view.join(' '));
+  }
+
+  function zoomMap(scale, cursor) {
+    // Clamp to a sensible range — wider than 80 m or narrower than 2 m
+    // is rarely useful and risks numeric issues with stroke widths.
+    const newW = Math.max(2, Math.min(80, view[2] * scale));
+    const newH = Math.max(2, Math.min(80, view[3] * scale));
+    if (cursor) {
+      // Keep the world point under the cursor stationary while zooming.
+      const fx = (cursor.x - view[0]) / view[2];
+      const fy = (cursor.y - view[1]) / view[3];
+      view[0] = cursor.x - fx * newW;
+      view[1] = cursor.y - fy * newH;
+    } else {
+      // Centre-anchored zoom — keep the centre of the view fixed.
+      const cx = view[0] + view[2] / 2;
+      const cy = view[1] + view[3] / 2;
+      view[0] = cx - newW / 2;
+      view[1] = cy - newH / 2;
+    }
+    view[2] = newW;
+    view[3] = newH;
+    applyView();
+  }
+
+  function resetMapView() {
+    view = [...DEFAULT_VIEW];
+    applyView();
+  }
+
+  function clientToWorld(evt) {
+    // Convert a pointer event in client pixels to world-meter coordinates
+    // using the SVG's CTM. Single source of truth — used for both wheel
+    // zoom and drag pan.
+    const pt = els.map.createSVGPoint();
+    pt.x = evt.clientX;
+    pt.y = evt.clientY;
+    return pt.matrixTransform(els.map.getScreenCTM().inverse());
+  }
+
+  // Wheel: zoom in/out, anchored on the cursor.
+  els.map.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const cursor = clientToWorld(e);
+    // deltaY > 0 = scroll down = zoom out.
+    zoomMap(e.deltaY > 0 ? 1.15 : 1 / 1.15, cursor);
+  }, { passive: false });
+
+  // Drag-to-pan. Track in world coords for stable movement at any zoom.
+  let panning = null;  // { start: SVGPoint, viewStart: [x,y,w,h] }
+  els.map.addEventListener('pointerdown', (e) => {
+    panning = { start: clientToWorld(e), viewStart: [...view] };
+    els.map.classList.add('is-panning');
+    els.map.setPointerCapture(e.pointerId);
+  });
+  els.map.addEventListener('pointermove', (e) => {
+    if (!panning) return;
+    const cur = clientToWorld(e);
+    // Naive delta wouldn't be stable because the CTM moves with the
+    // viewBox during the drag. Anchor on the original viewStart.
+    view[0] = panning.viewStart[0] - (cur.x - panning.start.x);
+    view[1] = panning.viewStart[1] - (cur.y - panning.start.y);
+    applyView();
+  });
+  const endPan = (e) => {
+    if (!panning) return;
+    panning = null;
+    els.map.classList.remove('is-panning');
+    if (e.pointerId !== undefined) {
+      try { els.map.releasePointerCapture(e.pointerId); } catch {}
+    }
+  };
+  els.map.addEventListener('pointerup',     endPan);
+  els.map.addEventListener('pointercancel', endPan);
+  els.map.addEventListener('pointerleave',  endPan);
+
+  // Buttons.
+  els.zoomIn?.addEventListener('click',  () => zoomMap(1 / 1.25));
+  els.zoomOut?.addEventListener('click', () => zoomMap(1.25));
+  els.zoomFit?.addEventListener('click', resetMapView);
 
   // ── Chat ─────────────────────────────────────────────────────────────────
   els.chatForm.addEventListener('submit', async (e) => {
@@ -342,6 +495,8 @@
     line.className = `chat-line chat-${kind}`;
     const tag = {
       user: 'you', bot: 'sweetie', sys: 'sys', spk: 'speak', err: 'err',
+      autonomy: 'sweetie',
+      'goal-set': 'goal', 'goal-cleared': 'goal',
       'intent-ok': 'do', 'intent-noop': 'do', 'intent-rej': 'do✗',
       assist: 'assist',
     }[kind] || kind;

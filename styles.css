@@ -149,9 +149,93 @@ body { display: flex; flex-direction: column; }
 .panel-title .dim { color: var(--ink-faint); font-weight: 400; }
 
 /* ========================================================================
+   Goal strip — sweetie's current intention, displayed prominently
+   between header and main grid.
+   ====================================================================== */
+.goal-strip {
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+  padding: 10px 22px;
+  background: linear-gradient(
+    90deg,
+    rgba(240, 160, 32, 0.12) 0%,
+    rgba(240, 160, 32, 0.04) 60%,
+    transparent 100%
+  );
+  border-bottom: 1px solid var(--line);
+  border-top: 1px solid var(--line);
+  z-index: 1;
+}
+.goal-strip .goal-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.28em;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.goal-strip .goal-value {
+  font-size: 14px;
+  color: var(--accent);
+  font-weight: 500;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.goal-strip.is-empty .goal-value {
+  color: var(--ink-faint);
+  font-style: italic;
+  font-weight: 400;
+}
+
+/* ========================================================================
+   Supervisor override panel — collapsible by design.
+   ====================================================================== */
+.override-panel {
+  border: 1px dashed var(--line);
+  background: rgba(0, 0, 0, 0.20);
+  margin-top: auto;     /* push to bottom of map-panel */
+}
+.override-summary {
+  cursor: pointer;
+  padding: 8px 14px;
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  list-style: none;
+  user-select: none;
+}
+.override-summary::-webkit-details-marker { display: none; }
+.override-summary::before {
+  content: '▸';
+  color: var(--ink-faint);
+  transition: transform 120ms;
+}
+.override-panel[open] .override-summary::before { transform: rotate(90deg); }
+.override-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+  color: var(--warn);
+  font-weight: 500;
+}
+.override-body {
+  padding: 12px 14px 14px;
+  border-top: 1px solid var(--line);
+}
+
+/* ========================================================================
    Joystick
    ====================================================================== */
-.pad-panel { align-items: center; }
+/* The map+override panel layout: map fills, override is collapsible below. */
+.map-section-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+}
 
 .joystick {
   position: relative;
@@ -160,6 +244,14 @@ body { display: flex; flex-direction: column; }
   margin: 8px auto 4px auto;
   user-select: none;
   touch-action: none;
+}
+.joystick.joystick-compact {
+  width: 180px;
+  height: 180px;
+  margin: 4px auto 0 auto;
+}
+.joystick.joystick-compact .joystick-knob {
+  width: 40px; height: 40px;
 }
 .joystick-ring {
   position: absolute; inset: 0;
@@ -311,6 +403,9 @@ body { display: flex; flex-direction: column; }
 .chat-line.chat-spk  .chat-tag    { color: var(--ok); }
 .chat-line.chat-err  .chat-tag    { color: var(--err); }
 .chat-line.chat-assist .chat-tag  { color: var(--warn); }
+.chat-line.chat-autonomy .chat-tag    { color: #c4a8e2; }
+.chat-line.chat-goal-set .chat-tag    { color: var(--accent); }
+.chat-line.chat-goal-cleared .chat-tag { color: var(--ink-dim); }
 .chat-line.chat-intent-ok   .chat-tag  { color: var(--ok); }
 .chat-line.chat-intent-noop .chat-tag  { color: var(--ink-dim); }
 .chat-line.chat-intent-rej  .chat-tag  { color: var(--err); }
@@ -330,6 +425,32 @@ body { display: flex; flex-direction: column; }
   content: '⚠ ';
   opacity: 0.8;
 }
+
+/* Autonomy-initiated chat: things sweetie says or does on her own
+ * initiative (not in response to a typed message). Distinct from
+ * supervisor-prompted speak so the supervisor can tell at a glance
+ * which is which. */
+.chat-line.chat-autonomy .chat-body {
+  color: #c4a8e2;  /* slightly brighter than the old purple */
+  font-style: italic;
+}
+.chat-line.chat-autonomy .chat-body::before {
+  content: '◇ ';   /* hollow diamond marks "self-initiated" */
+  opacity: 0.7;
+}
+
+/* Goal-set events get a distinct variant — they're a kind of intent
+ * but matter enough structurally to be visually called out. */
+.chat-line.chat-goal-set .chat-body,
+.chat-line.chat-goal-cleared .chat-body {
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+.chat-line.chat-goal-set .chat-body::before     { content: '◆ goal: '; opacity: 0.9; }
+.chat-line.chat-goal-cleared .chat-body::before { content: '◇ cleared: '; opacity: 0.6; }
+
 .chat-line.chat-intent-ok .chat-body,
 .chat-line.chat-intent-noop .chat-body,
 .chat-line.chat-intent-rej .chat-body {
@@ -365,24 +486,23 @@ body { display: flex; flex-direction: column; }
 /* ========================================================================
    World map (top-down)
    ====================================================================== */
-.map-section {
-  margin-top: 22px;
-  padding-top: 14px;
-  border-top: 1px solid var(--line);
-  width: 100%;
-  max-width: 320px;
-  align-self: center;
+/* The map now lives directly inside .map-section-panel as the primary
+ * panel content; no nested wrapper. Override controls collapse below. */
+.map-controls-hint {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-align: right;
+  margin-top: 4px;
+  padding-right: 4px;
 }
 
-.map-title {
-  margin: 0 0 10px 0;
-  font-size: 9px;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.22em;
-  color: var(--ink-faint);
+.map-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
-.map-title .dim { color: var(--line-hot); }
 
 .map {
   width: 100%;
@@ -391,29 +511,55 @@ body { display: flex; flex-direction: column; }
   background: var(--bg-sunk);
   border: 1px solid var(--line-hot);
   display: block;
+  cursor: grab;
+  touch-action: none;
 }
+.map.is-panning { cursor: grabbing; }
+
+.map-zoom-buttons {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.map-btn {
+  width: 1.6rem;
+  height: 1.6rem;
+  background: var(--bg-sunk);
+  color: var(--ink);
+  border: 1px solid var(--line-hot);
+  font-family: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+.map-btn:hover { background: var(--bg); color: var(--ink-hot); }
 
 .map-grid line,
 .map-grid circle {
   stroke: var(--line);
-  stroke-width: 0.012;
+  stroke-width: 0.025;
   fill: none;
 }
 .map-grid circle {
-  stroke-dasharray: 0.04 0.06;
-  opacity: 0.6;
+  stroke-dasharray: 0.08 0.12;
+  opacity: 0.5;
 }
 
 .map-object circle.body {
   fill: var(--line-hot);
   stroke: var(--ink-dim);
-  stroke-width: 0.015;
+  stroke-width: 0.025;
   transition: fill 200ms, stroke 200ms;
 }
 .map-object.is-dynamic circle.body {
   fill: var(--bg-sunk);
   stroke: var(--info);
-  stroke-width: 0.025;
+  stroke-width: 0.04;
 }
 .map-object circle.body.is-target {
   /* highlighted by JS when the LLM looks_at this object */
@@ -426,21 +572,56 @@ body { display: flex; flex-direction: column; }
 .map-object text {
   fill: var(--ink-dim);
   font-family: var(--mono);
-  font-size: 0.18px;
+  font-size: 0.32px;
   letter-spacing: 0.02em;
   text-anchor: middle;
   pointer-events: none;
 }
 
+/* Category-specific styling — keeps the map readable as the world grows. */
+.map-object.cat-stairs circle.body {
+  fill: transparent;
+  stroke: #8a7ab0;
+  stroke-width: 0.05;
+  stroke-dasharray: 0.10 0.08;
+}
+.map-object.cat-terrain.passable circle.body {
+  fill: transparent;
+  stroke: #5e8050;
+  stroke-width: 0.04;
+  stroke-dasharray: 0.20 0.12;
+  opacity: 0.7;
+}
+.map-object.cat-vehicle circle.body {
+  fill: #443b2a;
+  stroke: #8a7551;
+  stroke-width: 0.04;
+}
+.map-object.cat-cone circle.body {
+  fill: #c25a18;
+  stroke: #f0a020;
+  stroke-width: 0.025;
+}
+.map-object.cat-prop circle.body {
+  fill: #4a3826;
+  stroke: #8a6a4a;
+  stroke-width: 0.025;
+}
+.map-object.cat-infrastructure circle.body,
+.map-object.cat-barrier circle.body {
+  fill: var(--ink-dim);
+  stroke: none;
+}
+
 .map-robot polygon {
   fill: var(--accent);
   stroke: var(--bg);
-  stroke-width: 0.02;
+  stroke-width: 0.04;
 }
 .map-robot circle {
   fill: var(--bg);
   stroke: var(--accent);
-  stroke-width: 0.02;
+  stroke-width: 0.04;
 }
 .map-robot.is-estop polygon { fill: var(--err); }
 .map-robot.is-estop circle  { stroke: var(--err); }
