@@ -98,12 +98,22 @@ def _import_sdk() -> dict[str, Any]:
             "`pip install git+https://github.com/unitreerobotics/unitree_sdk2_python`. "
             f"Original error: {e}"
         ) from e
+    # Onboard audio is optional: not every SDK/firmware build exposes AudioClient,
+    # and speech is non-critical (the chat broadcast is the primary channel). Import
+    # best-effort so its absence never blocks connect(); speak_through_robot degrades.
+    try:
+        from unitree_sdk2py.go2.audio.audio_client import (  # type: ignore[import-not-found]
+            AudioClient,
+        )
+    except Exception:
+        AudioClient = None
     return {
         "ChannelFactoryInitialize": ChannelFactoryInitialize,
         "ChannelSubscriber": ChannelSubscriber,
         "SportClient": SportClient,
         "SportModeState_": SportModeState_,
         "LowState_": LowState_,
+        "AudioClient": AudioClient,
     }
 
 
@@ -130,15 +140,26 @@ class RealBridge(BridgeBase):
     DEFAULT_NETWORK_INTERFACE = "eth0"
     DEFAULT_DOMAIN_ID = 0
     SDK_TIMEOUT_S = 10.0
+    TTS_SPEAKER_ID = 0  # default onboard voice for AudioClient.TtsMaker
 
     def __init__(
         self,
         network_interface: str | None = None,
         domain_id: int = 0,
+        *,
+        enable_risky: bool = False,
+        enable_lidar_map: bool = False,
     ) -> None:
         self._network_interface = network_interface or self.DEFAULT_NETWORK_INTERFACE
         self._domain_id = domain_id
         self._connected = False
+        # Gate for acrobatic gestures (flips, handstand…). Off by default so
+        # neither the LLM nor a stray dashboard tap can hurt the robot.
+        self._enable_risky = bool(enable_risky)
+        # Optional LiDAR occupancy mapping (rt/utlidar/voxel_map). When on, the
+        # nav grid is the live LiDAR map so go_to_pose/plan_to route on it.
+        self._enable_lidar_map = bool(enable_lidar_map)
+        self._lidar_mapper = None
 
         # Populated in connect().
         self._sport: Any = None
@@ -158,6 +179,16 @@ class RealBridge(BridgeBase):
         # Background task: feeds the perception layer with each LowState
         # update. Started in connect(), cancelled in disconnect().
         self._perception_task: asyncio.Task | None = None
+
+        # Optional planner map (a planner.GridView, a mapping.OccupancyGrid, or
+        # a callable returning one). When set, plan_to() can compute routes and
+        # the Navigator layer can execute them through SafetyGuard. See
+        # set_nav_grid(). None = no map, navigation refused (legacy behaviour).
+        self._nav_grid = None
+
+        # Optional onboard audio client (TTS). Set in connect() when the SDK
+        # exposes one; None disables speak_through_robot's physical path.
+        self._audio: Any = None
 
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
@@ -183,7 +214,32 @@ class RealBridge(BridgeBase):
         self._sport.SetTimeout(self.SDK_TIMEOUT_S)
         self._sport.Init()
 
+        # Optional onboard audio (TTS). Absent in older SDK builds and in the
+        # test SDK mock; speak_through_robot falls back to chat when None.
+        audio_cls = sdk.get("AudioClient")
+        if audio_cls is not None:
+            try:
+                self._audio = audio_cls()
+                self._audio.SetTimeout(self.SDK_TIMEOUT_S)
+                self._audio.Init()
+                logger.info("RealBridge: onboard audio client ready")
+            except Exception:
+                logger.exception("RealBridge: audio client init failed — voice disabled")
+                self._audio = None
+
         self._connected = True
+
+        # Bring up LiDAR occupancy mapping if requested. The grid auto-backs the
+        # planner (set_nav_grid), so go_to_pose/plan_to route on the live map.
+        if self._enable_lidar_map and self._lidar_mapper is None:
+            from sweetie.core.lidar_map import LidarMapper
+            self._lidar_mapper = LidarMapper()
+            if self._nav_grid is None:
+                self._nav_grid = lambda: (
+                    self._lidar_mapper.grid_view() if self._lidar_mapper else None
+                )
+            logger.info("RealBridge: LiDAR occupancy mapping enabled "
+                        "(subscribe rt/utlidar/voxel_map -> ingest_voxel_map)")
         # Start the perception forwarder. Reads cached state under lock,
         # drives `RealPerception`, publishes new events to the bus —
         # same shape SimBridge does in its tick loop.
@@ -208,6 +264,8 @@ class RealBridge(BridgeBase):
         self._sport_state_sub = None
         self._low_state_sub = None
         self._sport = None
+        self._audio = None
+        self._lidar_mapper = None
         logger.info("RealBridge disconnected")
 
     # ── Perception loop ─────────────────────────────────────────────────────
@@ -369,27 +427,86 @@ class RealBridge(BridgeBase):
                 self._state.body_height = clamped
         return ok
 
+    def ingest_voxel_map(self, msg) -> int:
+        """Feed one raw LiDAR voxel-map message into the occupancy map, using the
+        latest cached robot pose. Returns the number of points integrated (0 if
+        LiDAR mapping is off). On hardware, subscribe `rt/utlidar/voxel_map` (see
+        teleop/webrtc_topics.py) and call this from the callback; in tests, pass
+        a synthetic message. The voxel-map IDL type is firmware-specific, so the
+        DDS subscription is left to bring-up rather than guessed here."""
+        if self._lidar_mapper is None:
+            return 0
+        with self._state_lock:
+            x, y, yaw = self._state.x, self._state.y, self._state.yaw
+        return self._lidar_mapper.ingest(msg, x, y, yaw)
+
+    def set_nav_grid(self, grid_or_provider) -> None:
+        """Give the bridge a map so it can plan routes. Accepts a planner
+        GridView, a mapping.OccupancyGrid (LiDAR/SLAM), or a zero-arg callable
+        returning one. Execution of a planned route is done by
+        `core.navigator.Navigator`, which routes motion through SafetyGuard."""
+        self._nav_grid = grid_or_provider
+
+    def _resolve_grid(self):
+        g = self._nav_grid() if callable(self._nav_grid) else self._nav_grid
+        if g is None:
+            return None
+        if hasattr(g, "blocked_grid"):  # OccupancyGrid -> inflated GridView
+            from sweetie.core.planner import GridView, DEFAULT_ROBOT_R
+            return GridView(g.blocked_grid(inflate_radius=DEFAULT_ROBOT_R),
+                            g.res, g.origin_x, g.origin_y)
+        return g
+
+    async def plan_to(self, x: float, y: float):
+        """Plan a route from the current pose to (x, y); world waypoints or None.
+        Pure planning — does not move the robot. The Navigator follows the path
+        and is the only thing that issues motion (through SafetyGuard)."""
+        grid = self._resolve_grid()
+        if grid is None:
+            return None
+        from sweetie.core.planner import plan_path
+        st = await self.get_state()
+        return plan_path(grid, (st.x, st.y), (x, y))
+
     async def go_to_pose(self, x: float, y: float) -> bool:
-        # Real-hardware navigation needs a planner + obstacle awareness
-        # we don't have on the wire yet (perception is unimplemented;
-        # path-planning is M? Nav2). Calling this on real hardware would
-        # be unsafe, so we refuse explicitly rather than silently doing
-        # nothing. A future M? Nav2 layer implements this properly.
-        logger.warning(
-            "RealBridge.go_to_pose(%.2f, %.2f) refused — no navigation "
-            "stack on real hardware yet.", x, y,
-        )
-        return False
+        # The bridge is intentionally "dumb": it never runs a motion loop,
+        # because every command must pass SafetyGuard, which lives ABOVE the
+        # bridge. So go_to_pose plans (when a map is set) and reports whether a
+        # route exists; `core.navigator.Navigator` executes it safely.
+        if self._nav_grid is None:
+            logger.warning(
+                "RealBridge.go_to_pose(%.2f, %.2f) refused — no map set "
+                "(call set_nav_grid; Navigator executes the route).", x, y,
+            )
+            return False
+        path = await self.plan_to(x, y)
+        if not path:
+            logger.info("RealBridge.go_to_pose: no route to (%.2f, %.2f)", x, y)
+            return False
+        logger.info("RealBridge.go_to_pose: route found (%d waypoints) — hand to Navigator",
+                    len(path))
+        return True
 
     async def follow_path(self, waypoints: list[tuple[float, float]]) -> bool:
-        # Same reasoning as go_to_pose — refuse explicitly on real
-        # hardware until perception + planner exist. A real Nav2
-        # integration would queue the points; we have none of that yet.
-        logger.warning(
-            "RealBridge.follow_path(%d waypoints) refused — no navigation "
-            "stack on real hardware yet.", len(waypoints),
-        )
-        return False
+        # As above: the bridge validates the path is collision-free against the
+        # map (if one is set) but does not drive it; the Navigator does, gated
+        # by SafetyGuard. Without a map we can't validate, so we refuse.
+        if self._nav_grid is None:
+            logger.warning(
+                "RealBridge.follow_path(%d waypoints) refused — no map set "
+                "(Navigator executes; call set_nav_grid).", len(waypoints),
+            )
+            return False
+        grid = self._resolve_grid()
+        from sweetie.core.planner import line_of_sight
+        clear = all(
+            line_of_sight(grid, waypoints[i][0], waypoints[i][1],
+                        waypoints[i + 1][0], waypoints[i + 1][1])
+            for i in range(len(waypoints) - 1)
+        ) if len(waypoints) >= 2 else bool(waypoints)
+        if not clear:
+            logger.info("RealBridge.follow_path: path crosses an obstacle — rejected")
+        return clear
 
     # ── Perception delegation ──────────────────────────────────────────────
 
@@ -407,36 +524,63 @@ class RealBridge(BridgeBase):
         """No region tracking on real hardware (no world model)."""
         return None
 
+    async def perform_gesture(self, name: str) -> bool:
+        """Play an expressive gesture by calling the matching SportClient
+        method (Hello, Stretch, WiggleHips, FingerHeart, Dance1…). Names and
+        ids come from `core.gestures` / the vendored ROBOT_CMD table.
+
+        Acrobatic gestures (flips, handstand, moonwalk…) are refused unless the
+        bridge was constructed with `enable_risky=True`. Unknown names, a
+        firmware without the method, or a disconnected bridge all return False.
+        """
+        from sweetie.core.gestures import resolve
+        g = resolve(name)
+        if g is None:
+            logger.info("perform_gesture: unknown gesture %r", name)
+            return False
+        if g.risky and not self._enable_risky:
+            logger.warning("perform_gesture: %r is acrobatic; risky gestures disabled", name)
+            return False
+        if not self._connected or self._sport is None:
+            return False
+        fn = getattr(self._sport, g.method, None)
+        if fn is None:
+            logger.info("perform_gesture: SDK SportClient lacks %s", g.method)
+            return False
+        return await self._sdk_call(fn)
+
     # ── Audio hub ──────────────────────────────────────────────────────────
 
     async def speak_through_robot(self, text: str) -> bool:
-        """Push TTS audio through the Go2's audio hub.
+        """Speak `text` out of the Go2's own speaker via onboard TTS.
 
-        UNIMPLEMENTED — the audio hub API (`AUDIO_HUB_COMMANDS` from
-        upstream go2_ros2_sdk: START_AUDIO=4001, SEND_AUDIO_BLOCK=4003,
-        STOP_AUDIO=4002) takes raw audio blocks, not text. A complete
-        implementation needs:
+        Primary path: the SDK's `AudioClient.TtsMaker(text, speaker_id)`, which
+        runs synthesis on the robot — no host-side TTS engine or PCM chunking
+        needed. Same call convention as the sport API (0 = success), run through
+        `_sdk_call`. Returns True only if the robot accepted the utterance.
 
-          1. An external TTS engine to synthesize `text` to PCM audio
-             (espeak / festival / pyttsx3 for offline; or a cloud API).
-          2. Block-chunking the PCM into the format AUDIO_HUB expects
-             (sample rate / encoding / chunk size — not documented in
-             the BSD-2 references; needs hardware to verify).
-          3. Sequenced START_AUDIO → SEND_AUDIO_BLOCK* → STOP_AUDIO.
+        Degrades cleanly: if audio is unavailable (no client, older firmware,
+        or the SDK mock), returns False and the caller's chat broadcast remains
+        the delivery channel. As with the sport API, the exact TtsMaker
+        signature/speaker ids depend on firmware — verify on bring-up; this is
+        the one line to adjust.
 
-        Until this lands, we log the attempt and return False so the
-        cognition layer's `speak` tool can fall back to the chat
-        broadcast cleanly. Architectural seam is in place — the day
-        someone has a Go2 to test against, only this method changes.
-
-        See `third_party/go2_ros2_sdk/webrtc_topics.py` for the
-        AUDIO_HUB_COMMANDS source.
+        Alternative for firmware without TtsMaker: stream PCM blocks through the
+        raw audio hub (`AUDIO_HUB_COMMANDS`: START_AUDIO 4001 → SEND_AUDIO_BLOCK
+        4003* → STOP_AUDIO 4002), see teleop/webrtc_topics.py and
+        docs/hardware-bringup.md.
         """
-        logger.info(
-            "speak_through_robot(%r) — not implemented yet on real hardware "
-            "(needs external TTS engine + audio block encoding)", text,
-        )
-        return False
+        text = (text or "").strip()
+        if not text:
+            return False
+        if not self._connected or self._audio is None:
+            logger.info("speak_through_robot(%r) — no onboard audio; using chat fallback", text)
+            return False
+        tts = getattr(self._audio, "TtsMaker", None)
+        if tts is None:
+            logger.info("speak_through_robot — audio client lacks TtsMaker; chat fallback")
+            return False
+        return await self._sdk_call(tts, text, self.TTS_SPEAKER_ID)
 
     # ── Internals ───────────────────────────────────────────────────────────
 

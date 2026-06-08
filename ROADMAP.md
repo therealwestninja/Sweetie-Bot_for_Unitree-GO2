@@ -70,8 +70,8 @@ What this means for the roadmap:
 | `set_body_height` (crouch/tall, 0.18-0.34 m) | ✅    | LLM tool; clamped, not rejected                            |
 | `go_to_pose(x, y)` (straight-line nav)    | ✅       | Smooth deceleration, cancellable; no path-planning         |
 | `follow_path([(x,y), ...])` (waypoints)   | ✅       | Queued nav with smooth handoff                              |
-| Real-hardware nav (Nav2 + costmap)        | ⏳       | `go_to_pose`/`follow_path` deliberately refuse on `RealBridge` until perception + planner exist |
-| Gait switching (walk/trot/bound)          | ⏳       | API IDs known; mostly aesthetic without physics             |
+| Real-hardware nav (planner + Navigator)   | 🟡       | Back-ported `core/planner.py` (A*+string-pull), `core/navigator.py` (guard-routed follower), `core/mapping.py`; `go_to_pose`/`follow_path` now plan & route. Live drive needs hardware. |
+| Gait / expressive gestures                | 🟡       | `core/gestures.py` reconciles names→ROBOT_CMD ids; safe set exposed as the `gesture` tool, acrobatics gated. Gait-mode switching still open. |
 | Tour-style multi-region exploration       | ⏳       | Composition over `follow_path`; autonomy could already do this with prompting, structural support deferred |
 
 ### Perception & vision
@@ -84,7 +84,7 @@ What this means for the roadmap:
 | Ray-traced occlusion                      | ✅       | Solid obstacles block sight; passable terrain doesn't      |
 | Vision-entry/exit events                  | ✅       | Streamed to bus for autonomy reactions                     |
 | Real-camera detector / tracker            | 🟡       | `RealPerception` ships proximity-only events; semantic detector still needed |
-| Lidar voxel-map decoding                  | ⏳       | Upstream decoder shape known (BSD-2 reference); not adopted |
+| Lidar voxel-map decoding                  | 🟡       | `core/lidar_map.py` decodes voxels → planar OccupancyGrid → planner; `RealBridge.ingest_voxel_map` seam. Synthetic-tested; live message schema verify on bring-up. |
 | Semantic segmentation                     | ⏳       | Sim could fake; real-hardware would need an external model |
 | Depth from camera                         | ⏳       | Real Go2 RealSense publishes depth; not consumed yet       |
 
@@ -114,7 +114,7 @@ What this means for the roadmap:
 | Scene-aware system prompt                 | ✅       | Built from world contents; doesn't fabricate              |
 | Sliding-window history (token budget)     | ✅       | Trim threshold 50 → target 30 messages; respects tool_use/tool_result pairing |
 | Onboard / offboard split                  | ⏳       | Currently one Claude call per tick; future split may put a fast onboard policy in front of Claude for routine decisions |
-| Multi-LLM (e.g. local model fallback)     | 🚫       | Out of scope: keeps the architecture simple                |
+| Perchance fallback AI (no-key/offline)    | 🟡       | `core/perchance_bridge.py` + `/api/perchance/*` + userscript route conversational replies through Perchance's aiTextPlugin when no Anthropic key. Conversation only (no tools). |
 
 ### Real hardware
 
@@ -125,7 +125,7 @@ What this means for the roadmap:
 | `BodyHeight` SDK call                     | 🟡       | Wired to `set_body_height`; absolute → relative offset     |
 | Pre-flight bring-up diagnostic            | ✅       | `python -m sweetie.tools.preflight` — read-only            |
 | WebRTC transport (alternative to DDS)     | 🚫       | Reference materials kept; transport choice is firmly DDS   |
-| Audio hub (TTS through robot speaker)     | 🟡       | Bridge seam wired (`speak_through_robot`); audio block encoding unimplemented |
+| Audio hub (TTS through robot speaker)     | 🟡       | `speak_through_robot` now calls onboard `AudioClient.TtsMaker` (optional client); raw audio-block path documented as fallback. Needs hardware verify. |
 | Camera frame ingestion                    | ⏳       | Required prerequisite for real semantic vision              |
 | First-time hardware bring-up doc          | ✅       | See [`docs/hardware-bringup.md`](docs/hardware-bringup.md) — speculative until run |
 

@@ -267,7 +267,14 @@ class SafetyGuard:
 
     READ_ONLY_ACTIONS = frozenset({"report"})
     ALWAYS_ACTIONS = frozenset({"halt"})  # allowed in any state (incl. ESTOP)
-    ARMED_REQUIRED_ACTIONS = frozenset({"stand_up", "sit_down", "look_at"})
+    # All physical motion the LLM can request requires the operator to have
+    # armed. (go_to_pose / follow_path / set_body_height were previously absent
+    # from every set, so guard_action() rejected them as "unknown action" —
+    # they could never run. They're motion, so they live here.)
+    ARMED_REQUIRED_ACTIONS = frozenset({
+        "stand_up", "sit_down", "look_at", "gesture",
+        "go_to_pose", "follow_path", "set_body_height",
+    })
 
     def guard_action(self, action: str) -> GuardResult:
         """Decide whether a discrete action is permitted right now."""

@@ -1,0 +1,28 @@
+$meta
+  title = Sweetie-bot // roaming companion PoC
+  description = A proof-of-concept companion robot that roams an apartment map in real time, paths around furniture (grid A-star + line-of-sight string-pulling + a local steering reflex), and has a physical sense of self, a mood that drives idle roaming and colors her voice, persistent memory across visits, and imagination. Her brain is Perchance's free native AI: talk to her and she replies in character (streamed), remembers you, pictures things, and can move on her own. Built on the Weld plugin suite (streamed chat, cleanup, persistence, images, persona voice, token budgeting) with raw-plugin fallbacks, so it runs even if a building block is missing.
+  tags = sweetie, robot, companion, ai, chat, pathfinding, agent, sim
+
+// Core Perchance plugins: free native AI brain + image generation (no key).
+aiTextPlugin      = {import:ai-text-plugin}
+textToImagePlugin = {import:text-to-image-plugin}
+
+// Weld building blocks. Each stashes window.weld.<name> inside its $output, which is
+// NOT auto-run on import, so the HTML panel calls root.<alias>() once at boot and then
+// feature-detects window.weld.* with raw fallbacks. Import order is irrelevant; all are
+// optional -- if one fails to load, the panel falls back to the raw plugin.
+weldStream  = {import:weld-stream-plugin}
+weldClean   = {import:weld-clean-plugin}
+weldPersist = {import:weld-persist-plugin}
+weldImage   = {import:weld-image-plugin}
+weldPersona = {import:weld-persona-plugin}
+weldTokens  = {import:weld-tokens-plugin}
+
+// Last-resort lines, only rendered if every AI path fails. Stays in soft, wordless character.
+fallbackReply
+  *tilts her head and chirps softly*
+  *gives a little wag and waits*
+  *blinks slowly, listening*
+
+output
+  text = [fallbackReply]

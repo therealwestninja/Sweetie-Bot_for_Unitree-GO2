@@ -386,3 +386,28 @@ def test_assist_log_capped():
     # Should be at most ASSIST_LOG_MAX (= 16) entries
     from sweetie.core.safety import ASSIST_LOG_MAX
     assert len(log) <= ASSIST_LOG_MAX
+
+
+# ── Regression: motion tools must be permitted when armed (were "unknown") ──
+
+
+def test_motion_actions_are_known_and_armed_gated():
+    """go_to_pose / follow_path / set_body_height / gesture were absent from
+    every action set, so guard_action() rejected them as 'unknown action'.
+    They are motion → allowed only when ARMED/ACTIVE, rejected in IDLE/ESTOP."""
+    from sweetie.core.safety import SafetyGuard
+    motion = ["go_to_pose", "follow_path", "set_body_height", "gesture"]
+
+    g = SafetyGuard()  # IDLE
+    for a in motion:
+        r = g.guard_action(a)
+        assert not r.allowed and "unknown" not in r.reason, f"{a} in IDLE: {r.reason}"
+
+    g.arm(); g.heartbeat()  # ACTIVE
+    for a in motion:
+        assert g.guard_action(a).allowed, f"{a} should be allowed when ACTIVE"
+
+    g.estop()
+    for a in motion:
+        r = g.guard_action(a)
+        assert not r.allowed and r.reason == "estop latched", f"{a} in ESTOP: {r.reason}"

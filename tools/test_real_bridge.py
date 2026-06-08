@@ -368,3 +368,53 @@ async def test_look_at_returns_no_world(patched_sdk):
     await b.connect()
     assert await b.look_at_entity("anything") == "no_world"
     await b.disconnect()
+
+
+# ── Onboard audio / speak_through_robot ─────────────────────────────────────
+
+
+def _make_fake_sdk_with_audio():
+    """Like _make_fake_sdk but also exposes an AudioClient with TtsMaker."""
+    sdk, sport_inst = _make_fake_sdk()
+    audio_inst = MagicMock()
+    audio_inst.TtsMaker.return_value = 0   # Unitree convention: 0 = success
+    audio_inst.SetTimeout.return_value = None
+    audio_inst.Init.return_value = None
+    sdk["AudioClient"] = MagicMock(return_value=audio_inst)
+    return sdk, audio_inst
+
+
+@pytest.mark.asyncio
+async def test_speak_through_robot_uses_onboard_tts():
+    from sweetie.core.real_bridge import RealBridge
+    sdk, audio_inst = _make_fake_sdk_with_audio()
+    with patch("sweetie.core.real_bridge._import_sdk", return_value=sdk):
+        b = RealBridge()
+        await b.connect()
+        ok = await b.speak_through_robot("hello there")
+        assert ok is True
+        audio_inst.TtsMaker.assert_called_once_with("hello there", RealBridge.TTS_SPEAKER_ID)
+        await b.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_speak_through_robot_falls_back_without_audio(patched_sdk):
+    # The default SDK mock has no AudioClient -> physical path returns False,
+    # and connect() must still succeed (regression guard).
+    from sweetie.core.real_bridge import RealBridge
+    b = RealBridge()
+    await b.connect()
+    assert await b.speak_through_robot("hi") is False
+    await b.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_speak_through_robot_empty_text_is_false():
+    from sweetie.core.real_bridge import RealBridge
+    sdk, audio_inst = _make_fake_sdk_with_audio()
+    with patch("sweetie.core.real_bridge._import_sdk", return_value=sdk):
+        b = RealBridge()
+        await b.connect()
+        assert await b.speak_through_robot("   ") is False
+        audio_inst.TtsMaker.assert_not_called()
+        await b.disconnect()

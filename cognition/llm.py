@@ -35,6 +35,8 @@ from anthropic import AsyncAnthropic
 
 from sweetie.core.bridge import BridgeBase
 from sweetie.core.bus import bus
+from sweetie.core.gestures import SAFE_GESTURES, GESTURES
+from sweetie.core.perchance_bridge import perchance_bridge as _default_perchance
 from sweetie.core.safety import SafetyGuard
 
 logger = logging.getLogger(__name__)
@@ -466,6 +468,29 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "gesture",
+        "description": (
+            "Play a short expressive body gesture through the robot — a "
+            "non-locomotion bit of body language. Use it to add warmth or "
+            "personality (say hello, stretch, a little dance, a heart). It "
+            "requires being armed, briefly interrupts other motion, and then "
+            "the robot returns to standing. Options: "
+            + ", ".join(f"{n} ({GESTURES[n].desc})" for n in SAFE_GESTURES)
+            + "."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "enum": SAFE_GESTURES,
+                    "description": "Which gesture to play.",
+                },
+            },
+            "required": ["name"],
+        },
+    },
+    {
         "name": "set_goal",
         "description": (
             "Set or clear what you're currently trying to do. Use this to "
@@ -581,6 +606,7 @@ class Cognition:
         world=None,
         memory_store=None,
         episode_id: int | None = None,
+        perchance=None,
     ) -> None:
         api_key = os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
@@ -593,6 +619,11 @@ class Cognition:
         self._bridge = bridge
         self._safety = safety
         self._memory = memory_store
+        # Fallback conversational AI (Perchance, via the browser userscript
+        # bridge) used when no Anthropic client is available. Defaults to the
+        # shared singleton; it no-ops instantly unless a userscript is online,
+        # so this never slows the canned path.
+        self._perchance = perchance if perchance is not None else _default_perchance
         # Episode id for the current session — passed to `propose_fact`
         # so we can trace which session produced which fact. None means
         # facts will be stored without a source-session linkage (fine
@@ -636,9 +667,39 @@ class Cognition:
         # alone. Will retry on the next turn. (Pathological case: a
         # very long tool-call chain that never terminates.)
 
+    def _build_fallback_prompt(self, user_text: str) -> str:
+        """Flatten system prompt + recent text dialogue into a single plain-text
+        prompt for Perchance's aiTextPlugin (which has no tools or message roles).
+        Tool blocks are skipped; only user/assistant text turns are included."""
+        lines = [self._system_prompt.strip(),
+                "", "Continue the conversation as Sweetie. Reply with one short,"
+                " in-character line and nothing else.", ""]
+        for msg in self._history[-6:]:
+            content = msg.get("content")
+            if isinstance(content, str):
+                who = "User" if msg.get("role") == "user" else "Sweetie"
+                lines.append(f"{who}: {content}")
+        lines.append(f"User: {user_text}")
+        lines.append("Sweetie:")
+        return "\n".join(lines)
+
     async def chat(self, user_text: str) -> str:
         """Send a user message, run any tool calls, return the final text reply."""
         if self._client is None:
+            # No Anthropic client: try the Perchance fallback (conversational
+            # only — no tools). Returns None instantly if no userscript is
+            # connected, in which case we degrade to the canned reply.
+            if self._perchance is not None:
+                try:
+                    text = await self._perchance.submit(self._build_fallback_prompt(user_text))
+                except Exception:
+                    logger.exception("Perchance fallback raised")
+                    text = None
+                if text and text.strip():
+                    async with self._chat_lock:
+                        self._history.append({"role": "user", "content": user_text})
+                        self._history.append({"role": "assistant", "content": text.strip()})
+                    return text.strip()
             return f"(no API key — would have replied to: {user_text!r})"
 
         async with self._chat_lock:
@@ -790,6 +851,8 @@ class Cognition:
                 return await self._do_follow_path(args)
             if name == "set_goal":
                 return await self._do_set_goal(args)
+            if name == "gesture":
+                return await self._do_gesture(args)
             if name == "remember":
                 return await self._do_remember(args)
             if name in ACTION_TO_BRIDGE_METHOD:
@@ -963,6 +1026,26 @@ class Cognition:
             await self._announce_intent("go_to_pose", "rejected", guard.reason)
             return f"rejected: {guard.reason}"
 
+        # Prefer obstacle-aware routing: if the bridge can plan (sim World or a
+        # hardware map), turn the target into a path the planner routes around
+        # obstacles, and follow it. A trivial (≤2-point) route means the straight
+        # line is already clear, so fall through to the simpler go_to_pose.
+        route = None
+        planner = getattr(self._bridge, "plan_route", None)
+        if planner is not None:
+            try:
+                route = await planner(x, y)
+            except Exception:
+                logger.exception("plan_route failed; falling back to straight-line")
+                route = None
+        if route and len(route) > 2:
+            ok = await self._bridge.follow_path(route)
+            outcome = "ok" if ok else "no-op"
+            await self._announce_intent("go_to_pose", outcome, f"({x:.2f},{y:.2f}) via {len(route)} pts")
+            if not ok:
+                return "no-op: robot must be standing and not in estop"
+            return f"ok: routing to ({x:.2f}, {y:.2f}) around obstacles ({len(route)} waypoints)"
+
         ok = await self._bridge.go_to_pose(x, y)
         outcome = "ok" if ok else "no-op"
         await self._announce_intent("go_to_pose", outcome, f"({x:.2f},{y:.2f})")
@@ -1006,6 +1089,20 @@ class Cognition:
         if not ok:
             return "no-op: robot must be standing and not in estop"
         return f"ok: following path with {len(coerced)} waypoints"
+
+    async def _do_gesture(self, args: dict[str, Any]) -> str:
+        name = str(args.get("name", "")).strip().lower()
+        if not name:
+            return "error: empty gesture"
+        result = self._safety.guard_action("gesture")
+        if not result.allowed:
+            await self._announce_intent("gesture", "rejected", result.reason)
+            return f"rejected: {result.reason}"
+        ok = await self._bridge.perform_gesture(name)
+        outcome = "ok" if ok else "no-op"
+        await self._announce_intent("gesture", outcome, name)
+        logger.info("gesture %s: %s", name, outcome)
+        return outcome
 
     async def _do_set_goal(self, args: dict[str, Any]) -> str:
         """set_goal: store a short string as the current intention.

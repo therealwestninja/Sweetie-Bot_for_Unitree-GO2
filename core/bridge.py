@@ -116,6 +116,7 @@ class BridgeBase:
     async def look_at_entity(self, name: str) -> str: ...
     async def set_body_height(self, meters: float) -> bool: ...
     async def go_to_pose(self, x: float, y: float) -> bool: ...
+    async def perform_gesture(self, name: str) -> bool: ...
 
 
 class SimBridge(BridgeBase):
@@ -244,6 +245,32 @@ class SimBridge(BridgeBase):
     async def clear_estop(self) -> bool:
         if self._state.mode == "estop":
             self._state.mode = "down"
+        return True
+
+    async def plan_route(self, x: float, y: float):
+        """Plan an obstacle-avoiding route from the current pose to (x, y) over
+        the World, using the back-ported A* planner. Returns world-frame
+        waypoints (suitable for follow_path) or None if no route / no world.
+        Parity with RealBridge.plan_to so sim and hardware plan identically."""
+        if self._world is None:
+            return None
+        from sweetie.core.sim_grid import grid_from_world
+        from sweetie.core.planner import plan_path
+        grid = grid_from_world(self._world)
+        s = self._state
+        return plan_path(grid, (s.x, s.y), (x, y))
+
+    async def perform_gesture(self, name: str) -> bool:
+        """Play an expressive gesture. In sim this is behavioural-only (no
+        physics) — it succeeds for any known gesture while standing, so the
+        cognition/dashboard path can be exercised exactly as on hardware."""
+        from sweetie.core.gestures import resolve
+        g = resolve(name)
+        if g is None:
+            return False
+        if self._state.mode in ("estop", "down"):
+            return False
+        logger.info("SimBridge gesture: %s (%s)", name, g.desc)
         return True
 
     async def set_body_height(self, meters: float) -> bool:

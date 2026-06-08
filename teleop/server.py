@@ -38,6 +38,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
+# Layout fallback: if the assets dir is absent but the dashboard files sit
+# alongside server.py (some checkout/packaging layouts flatten them), serve
+# from here instead. No-op when teleop/static/ exists.
+if not STATIC_DIR.is_dir() and (Path(__file__).parent / "index.html").exists():
+    STATIC_DIR = Path(__file__).parent
 TELEMETRY_HZ = 20
 
 
@@ -272,6 +277,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+# Perchance fallback-AI bridge endpoints (browser userscript <-> cognition).
+from sweetie.core.perchance_bridge import perchance_bridge
+from sweetie.teleop.perchance_routes import make_perchance_router
+app.include_router(make_perchance_router(perchance_bridge))
+
 
 # ── HTTP ─────────────────────────────────────────────────────────────────────
 
@@ -280,7 +290,10 @@ async def index() -> str:
     return (STATIC_DIR / "index.html").read_text()
 
 
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+if STATIC_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+else:
+    logger.warning("teleop static dir %s not found — dashboard assets not served", STATIC_DIR)
 
 
 class ChatIn(BaseModel):

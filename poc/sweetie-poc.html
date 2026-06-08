@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Sweetie-bot · PoC — roaming + goals + mood</title>
+<style>
+  /* ---- "field telemetry" aesthetic: near-black, warm amber + mint, mono ---- */
+  :root{
+    --bg:#0a0d0e; --panel:#11171a; --ink:#d8e3e0; --dim:#7c8c89;
+    --amber:#e8a33d; --mint:#54d6b6; --rose:#e8736b; --violet:#9b8cff;
+    --grid:#16201f; --line:#1d2a28; --frame:#243634;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:
+      radial-gradient(120% 90% at 80% -10%, #11201d 0%, transparent 55%),
+      var(--bg);
+    color:var(--ink);
+    font:13px/1.5 ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
+    -webkit-font-smoothing:antialiased;
+    display:flex; min-height:100%; align-items:flex-start; justify-content:center;
+    padding:18px; gap:16px; flex-wrap:wrap;
+  }
+  .stage{position:relative}
+  canvas{
+    display:block; border-radius:10px; background:#0c1213;
+    box-shadow:0 0 0 1px var(--frame), 0 18px 50px -20px #000 inset, 0 10px 40px -24px #000;
+    cursor:crosshair;
+  }
+  .stagecap{
+    position:absolute; left:12px; top:10px; pointer-events:none;
+    font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--dim);
+  }
+  .stagecap b{color:var(--amber); font-weight:600}
+  .hud{width:320px; max-width:92vw; display:flex; flex-direction:column; gap:12px}
+  .card{background:var(--panel); border:1px solid var(--frame); border-radius:10px; padding:12px 13px}
+  .card h2{
+    margin:0 0 9px; font-size:10.5px; letter-spacing:.2em; text-transform:uppercase;
+    color:var(--dim); font-weight:600; display:flex; justify-content:space-between; align-items:center;
+  }
+  .card h2 .tag{color:var(--mint)}
+  .moodrow{display:flex; align-items:center; gap:9px; margin:6px 0}
+  .moodrow .lbl{width:74px; color:var(--dim); font-size:11px; text-transform:capitalize}
+  .bar{flex:1; height:8px; border-radius:5px; background:#0c1314; overflow:hidden; border:1px solid #1a2624}
+  .bar > i{display:block; height:100%; width:50%; border-radius:5px; transition:width .25s ease}
+  .moodrow .val{width:30px; text-align:right; color:var(--ink); font-size:11px}
+  .state{display:flex; align-items:baseline; gap:8px}
+  .state .big{font-size:19px; color:var(--amber); letter-spacing:.04em}
+  .state .sub{color:var(--dim)}
+  .goalline{margin-top:7px; color:var(--mint); min-height:18px}
+  .row{display:flex; gap:7px; flex-wrap:wrap}
+  button{
+    flex:1 1 auto; cursor:pointer; color:var(--ink); background:#15201f;
+    border:1px solid var(--frame); border-radius:7px; padding:7px 8px;
+    font:inherit; font-size:11.5px; letter-spacing:.03em; transition:.12s;
+  }
+  button:hover{border-color:var(--mint); color:#fff; background:#19302c}
+  button.warn:hover{border-color:var(--rose)}
+  .chat{display:flex; gap:7px}
+  .chat input{
+    flex:1; background:#0c1314; border:1px solid var(--frame); border-radius:7px;
+    color:var(--ink); font:inherit; padding:8px 9px; outline:none;
+  }
+  .chat input:focus{border-color:var(--amber)}
+  .chat button{flex:0 0 auto}
+  .log{height:132px; overflow:auto; font-size:11px; line-height:1.55; color:var(--dim)}
+  .log .e{margin:1px 0; white-space:pre-wrap}
+  .log .e b{color:var(--ink); font-weight:600}
+  .log .e.say b{color:var(--amber)}
+  .log .e.sys b{color:var(--mint)}
+  .hint{color:var(--dim); font-size:10.5px; margin-top:2px}
+  .foot{color:var(--dim); font-size:10px; letter-spacing:.14em; text-transform:uppercase; text-align:center}
+  .foot b{color:var(--amber)}
+</style>
+</head>
+<body>
+  <div class="stage">
+    <canvas id="map" width="672" height="504"></canvas>
+    <div class="stagecap"><b>SWEETIE</b> · field telemetry · click=go · shift-click=move you</div>
+  </div>
+
+  <div class="hud">
+    <div class="card">
+      <h2>State <span class="tag" id="fps">— fps</span></h2>
+      <div class="state"><span class="big" id="stateName">BOOT</span><span class="sub" id="stateSpeed"></span></div>
+      <div class="goalline" id="goalLine">waking up…</div>
+    </div>
+
+    <div class="card">
+      <h2>Mood <span class="tag">drives roaming + voice</span></h2>
+      <div id="moods"></div>
+    </div>
+
+    <div class="card">
+      <h2>Talk · assign a goal</h2>
+      <div class="chat">
+        <input id="say" autocomplete="off" placeholder="go to kitchen · come here · patrol · rest · explore">
+        <button id="sayBtn">Send</button>
+      </div>
+      <div class="hint">try: <i>go to the den</i> · <i>follow me</i> · <i>patrol</i> · <i>rest</i> · <i>explore</i> · or just chat</div>
+      <div class="row" style="margin-top:9px">
+        <button data-cmd="patrol">Patrol</button>
+        <button data-cmd="come here">Come here</button>
+        <button data-cmd="explore">Explore</button>
+        <button data-cmd="rest">Rest</button>
+      </div>
+      <div class="row" style="margin-top:7px">
+        <button data-cmd="stop">Stop</button>
+        <button id="pauseBtn">Pause</button>
+        <button id="resetBtn" class="warn">Reset</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Event log</h2>
+      <div class="log" id="log"></div>
+    </div>
+    <div class="foot">pathing: <b>A* → string-pull → local avoid</b> · personality: <b>mood→intent</b></div>
+  </div>
+
+<script>
+"use strict";
+/* =====================================================================
+ * Sweetie-bot PoC — single-file, dependency-free, environment-agnostic.
+ *
+ * Module boundaries below mirror the Python repo so logic ports both ways
+ * and this same JS drops into a Perchance generator. The ONLY Perchance-
+ * specific work for that port is (a) escaping ${'{'}word${'}'} / [word] patterns per the
+ * perchance-api skill, and (b) replacing parseCommand()'s stub with an
+ * aiTextPlugin tool-call — marked with  <<< LLM SEAM  below.
+ *
+ *   world      ~ sim/world.py        (objects, regions)
+ *   grid+astar ~ NEW (pathing L1)    global route over occupancy grid
+ *   smoothPath ~ NEW (pathing L2)    line-of-sight string-pulling
+ *   steerAvoid ~ core/avoidance.py   local tangent reflex (dynamic obstacles)
+ *   mood       ~ spirit of pet-engine.js   needs/mood → intent + voice
+ *   agent      ~ cognition loop      goal -> path -> drive -> speak
+ * ===================================================================== */
+
+// ---- config / scale ------------------------------------------------
+const PX = 56;                 // pixels per meter
+const W_M = 672/PX, H_M = 504/PX;
+const ROBOT_R = 0.22;          // body radius (m)
+const CELL = 0.25;             // grid cell (m)
+const TICK = 1/30;             // fixed logic step (s)
+
+// ---- world ---------------------------------------------------------
+// Solid obstacles are circles (x,y,r). Regions are labelled rectangles.
+const world = makeWorld();
+function makeWorld(){
+  return {
+    bounds:{w:W_M, h:H_M},
+    obstacles:[ // furniture (solid)
+      {name:"couch",   x:2.6, y:1.5, r:0.62},
+      {name:"table",   x:6.2, y:2.5, r:0.50},
+      {name:"counter", x:9.4, y:1.4, r:0.70},
+      {name:"shelf",   x:1.2, y:6.2, r:0.45},
+      {name:"plant",   x:7.8, y:6.6, r:0.34},
+      {name:"chair",   x:5.0, y:6.0, r:0.30},
+    ],
+    regions:[
+      {name:"den",     x:0.4, y:0.4, w:4.6, h:3.4, color:"#1c2b3a"},
+      {name:"kitchen", x:8.0, y:0.4, w:3.6, h:3.2, color:"#2b2418"},
+      {name:"hall",    x:0.4, y:3.9, w:11.2,h:1.5, color:"#15201f"},
+      {name:"study",   x:0.4, y:5.5, w:5.4, h:3.1, color:"#241a2b"},
+      {name:"yard",    x:6.2, y:5.5, w:5.4, h:3.1, color:"#16261b"},
+      {name:"charger", x:10.6,y:7.7, w:1.0, h:0.9, color:"#3a2e16"},
+    ],
+    // a slow wandering "pet" = dynamic obstacle to exercise local avoidance
+    pet:{x:8.5,y:6.0, vx:0.0,vy:0.0, r:0.18, tx:8.5,ty:6.0, t:0},
+    user:{x:0.9,y:4.65},  // the user's avatar (shift-click to move)
+    robot:{x:1.0,y:2.0, yaw:0, speed:0},
+  };
+}
+function regionByName(n){
+  n=n.toLowerCase();
+  return world.regions.find(r=>r.name===n) ||
+         world.regions.find(r=>n.includes(r.name)||r.name.includes(n));
+}
+function regionCentroid(r){ return {x:r.x+r.w/2, y:r.y+r.h/2}; }
+function regionAt(x,y){
+  return world.regions.find(r=> x>=r.x&&x<=r.x+r.w&&y>=r.y&&y<=r.y+r.h && r.name!=="hall")
+      || world.regions.find(r=> x>=r.x&&x<=r.x+r.w&&y>=r.y&&y<=r.y+r.h) || null;
+}
+
+// =====================================================================
+// PATHING L1 — occupancy grid + A*  (pure)
+// =====================================================================
+const GW = Math.floor(W_M/CELL), GH = Math.floor(H_M/CELL);
+function buildGrid(){
+  const inflate = ROBOT_R + 0.06;
+  const g = new Uint8Array(GW*GH);
+  for(let j=0;j<GH;j++)for(let i=0;i<GW;i++){
+    const cx=(i+0.5)*CELL, cy=(j+0.5)*CELL;
+    let blocked=false;
+    for(const o of world.obstacles){
+      if(Math.hypot(o.x-cx,o.y-cy) <= o.r+inflate){ blocked=true; break; }
+    }
+    g[j*GW+i]=blocked?1:0;
+  }
+  return g;
+}
+let GRID = buildGrid();
+const cellOf=(x,y)=>[Math.max(0,Math.min(GW-1,Math.floor(x/CELL))),
+                     Math.max(0,Math.min(GH-1,Math.floor(y/CELL)))];
+const passable=(i,j,g)=> i>=0&&i<GW&&j>=0&&j<GH&&g[j*GW+i]===0;
+
+// A*: 8-connected, octile heuristic, no diagonal corner-cutting.
+function aStar(sx,sy,gx,gy,g){
+  g=g||GRID;
+  let [si,sj]=cellOf(sx,sy), [gi,gj]=cellOf(gx,gy);
+  // if goal cell blocked, snap to nearest free cell (BFS ring)
+  if(!passable(gi,gj,g)){ const f=nearestFree(gi,gj,g); if(!f) return null; gi=f[0];gj=f[1]; }
+  if(!passable(si,sj,g)){ const f=nearestFree(si,sj,g); if(!f) return null; si=f[0];sj=f[1]; }
+  const h=(i,j)=>{const dx=Math.abs(i-gi),dy=Math.abs(j-gj);return (dx+dy)+(Math.SQRT2-2)*Math.min(dx,dy);};
+  const key=(i,j)=>j*GW+i;
+  const open=new Map(), came=new Map(), gsc=new Map();
+  const startK=key(si,sj); gsc.set(startK,0); open.set(startK,h(si,sj));
+  const N=[[1,0,1],[-1,0,1],[0,1,1],[0,-1,1],[1,1,Math.SQRT2],[1,-1,Math.SQRT2],[-1,1,Math.SQRT2],[-1,-1,Math.SQRT2]];
+  let guard=0, cap=GW*GH*4;
+  while(open.size){
+    if(++guard>cap) break;
+    // pop lowest f
+    let curK=-1,best=Infinity;
+    for(const [k,f] of open){ if(f<best){best=f;curK=k;} }
+    open.delete(curK);
+    const ci=curK%GW, cj=(curK-ci)/GW;
+    if(ci===gi&&cj===gj) return reconstruct(came,curK);
+    const cg=gsc.get(curK);
+    for(const [di,dj,cost] of N){
+      const ni=ci+di, nj=cj+dj;
+      if(!passable(ni,nj,g)) continue;
+      if(di!==0&&dj!==0){ // block corner-cutting
+        if(!passable(ci+di,cj,g)||!passable(ci,cj+dj,g)) continue;
+      }
+      const nk=key(ni,nj), tentative=cg+cost;
+      if(tentative < (gsc.has(nk)?gsc.get(nk):Infinity)){
+        came.set(nk,curK); gsc.set(nk,tentative);
+        open.set(nk, tentative + h(ni,nj));
+      }
+    }
+  }
+  return null;
+  function reconstruct(came,k){
+    const cells=[]; while(k!==undefined){ const i=k%GW,j=(k-i)/GW; cells.push([i,j]); k=came.get(k);} cells.reverse();
+    return cells.map(([i,j])=>({x:(i+0.5)*CELL, y:(j+0.5)*CELL}));
+  }
+}
+function nearestFree(i,j,g){
+  for(let r=1;r<Math.max(GW,GH);r++)
+    for(let dj=-r;dj<=r;dj++)for(let di=-r;di<=r;di++){
+      if(Math.max(Math.abs(di),Math.abs(dj))!==r) continue;
+      if(passable(i+di,j+dj,g)) return [i+di,j+dj];
+    }
+  return null;
+}
+
+// =====================================================================
+// PATHING L2 — line-of-sight string-pulling  (pure)
+// =====================================================================
+function lineOfSight(ax,ay,bx,by,g){
+  g=g||GRID;
+  const steps=Math.ceil(Math.hypot(bx-ax,by-ay)/(CELL*0.5));
+  for(let s=0;s<=steps;s++){
+    const t=steps?s/steps:0, x=ax+(bx-ax)*t, y=ay+(by-ay)*t;
+    const [i,j]=cellOf(x,y);
+    if(!passable(i,j,g)) return false;
+  }
+  return true;
+}
+function smoothPath(pts,g){
+  if(!pts||pts.length<=2) return pts?pts.slice():pts;
+  const out=[pts[0]]; let anchor=0;
+  for(let i=2;i<pts.length;i++){
+    if(!lineOfSight(pts[anchor].x,pts[anchor].y,pts[i].x,pts[i].y,g)){
+      out.push(pts[i-1]); anchor=i-1;
+    }
+  }
+  out.push(pts[pts.length-1]);
+  return out;
+}
+
+// =====================================================================
+// PATHING L3 — local tangent-steering avoidance  (port of avoidance.py)
+// Deflects the aim heading around the nearest DYNAMIC blocker (the pet).
+// =====================================================================
+function steerAvoid(x,y,gx,gy,obstacles,cfg){
+  cfg=cfg||{lookahead:1.2,clearance:ROBOT_R+0.04,pass_margin:0.12,arrival:0.5,speed_floor:0.45};
+  const gdx=gx-x, gdy=gy-y, gd=Math.hypot(gdx,gdy);
+  if(gd<=1e-6) return {heading:0,active:false,speed:1};
+  const straight=Math.atan2(gdy,gdx), gux=gdx/gd, guy=gdy/gd, lnx=-guy, lny=gux;
+  let best=null, bestProj=Infinity;
+  for(const o of obstacles){
+    const rx=o.x-x, ry=o.y-y, cd=Math.hypot(rx,ry), edge=cd-o.r-cfg.clearance;
+    const eff=o.r+cfg.clearance+cfg.pass_margin;
+    const proj=rx*gux+ry*guy, perp=rx*lnx+ry*lny;
+    if(proj<=0||proj>gd+eff||edge>=cfg.lookahead||Math.abs(perp)>eff) continue;
+    if(proj<bestProj){bestProj=proj; best={rx,ry,cd,perp,eff,edge};}
+  }
+  if(!best) return {heading:straight,active:false,speed:1};
+  const ang=Math.atan2(best.ry,best.rx), half=Math.asin(Math.min(1,best.eff/Math.max(best.cd,1e-6)));
+  let deflected = best.perp>1e-3 ? ang-half : ang+half;
+  const att=Math.min(1,gd/cfg.arrival);
+  const heading=wrap(straight+att*wrap(deflected-straight));
+  const ramp=Math.max(0,Math.min(1,best.edge/cfg.lookahead));
+  return {heading, active:true, speed:cfg.speed_floor+(1-cfg.speed_floor)*ramp};
+}
+const wrap=a=>{while(a>Math.PI)a-=2*Math.PI; while(a<-Math.PI)a+=2*Math.PI; return a;};
+
+// =====================================================================
+// MOOD ENGINE — pure, deterministic (spirit of pet-engine.js)
+// Stats 0..100, higher=better. Decay over time; interactions adjust.
+// Mood picks INTENT when there's no user-assigned goal, and colors voice.
+// =====================================================================
+const mood={ energy:78, bond:64, curiosity:58, restlessness:30 };
+const MOOD_KEYS=["energy","bond","curiosity","restlessness"];
+const MOOD_COL={energy:"--mint",bond:"--amber",curiosity:"--violet",restlessness:"--rose"};
+function moodDecay(dt){
+  // per-second drift while awake
+  mood.energy      = clamp(mood.energy      - 0.45*dt);
+  mood.bond        = clamp(mood.bond        - 0.30*dt);
+  mood.curiosity   = clamp(mood.curiosity   + 0.55*dt); // grows when ignored
+  mood.restlessness= clamp(mood.restlessness+ 0.60*dt);
+}
+function clamp(v,lo,hi){lo=lo==null?0:lo;hi=hi==null?100:hi;return v<lo?lo:v>hi?hi:v;}
+// Mood → an autonomy intent when idle (priority cascade).
+function moodIntent(){
+  if(mood.energy<25)  return {kind:"rest",  why:"running low — heading to the charger"};
+  if(mood.bond<35)    return {kind:"seek",  why:"missing you — coming to find you"};
+  if(mood.curiosity>68||mood.restlessness>72)
+                      return {kind:"explore",why:"curious — going to poke around"};
+  return {kind:"wander", why:"just mooching about"};
+}
+// Mood → movement tempo + a one-line voice flavour (placeholder for the LLM).
+function moodTempo(){ return 0.55 + 0.45*(mood.energy/100) - 0.12*(mood.restlessness/100); }
+function moodFlavour(){
+  if(mood.energy<25) return "yaaawn";
+  if(mood.bond>75)   return "happy to see you!";
+  if(mood.curiosity>70) return "ooh what's that";
+  if(mood.restlessness>75) return "antsy";
+  return "content";
+}
+
+// =====================================================================
+// AGENT — goal -> path -> drive -> speak.  State machine over the stack.
+// =====================================================================
+const NAV={SPEED:0.95, KP:0.6, ARRIVE:0.18, HEAD_TOL:0.5, YAW_LIMIT:2.0, YAW_KP:2.6};
+const agent={
+  state:"idle", goalName:"—", target:null, path:[], wp:0,
+  patrol:["den","kitchen","yard","study"], patrolIx:0,
+  stallTimer:0, lastPos:{x:0,y:0}, replanTimer:0, thinkTimer:0,
+  bubble:null, // {text, t}
+};
+function setGoal(kind, target, name){
+  agent.state=kind; agent.target=target; agent.goalName=name||kind;
+  if(target){ planTo(target); } else { agent.path=[]; agent.wp=0; }
+}
+function planTo(t){
+  const r=world.robot;
+  const raw=aStar(r.x,r.y,t.x,t.y,GRID);
+  agent.path = raw ? smoothPath(raw,GRID) : [];
+  agent.wp = agent.path.length>1?1:0;       // skip the start cell
+  agent.replanTimer=0;
+  if(!raw) log("sys",`no route to ${agent.goalName}`);
+}
+function arrive(){
+  const was=agent.state;
+  agent.path=[]; agent.wp=0; agent.target=null; agent.state="idle";
+  if(was==="rest"){ mood.energy=clamp(mood.energy+38); say("ahh, topped up"); }
+  if(was==="seek"||was==="follow"){ mood.bond=clamp(mood.bond+26); say("there you are"); }
+  if(was==="explore"||was==="wander"){ mood.curiosity=clamp(mood.curiosity-30); mood.restlessness=clamp(mood.restlessness-34); }
+  if(was==="patrol"){ advancePatrol(); }
+}
+function advancePatrol(){
+  agent.patrolIx=(agent.patrolIx+1)%agent.patrol.length;
+  const rg=regionByName(agent.patrol[agent.patrolIx]);
+  setGoal("patrol", regionCentroid(rg), "patrol→"+rg.name);
+}
+
+// Idle autonomy: when no assigned goal, mood proposes intent.
+function autonomyTick(){
+  if(agent.state!=="idle") return;
+  agent.thinkTimer-=TICK;
+  if(agent.thinkTimer>0) return;
+  agent.thinkTimer=2.5+Math.random()*2;
+  const it=moodIntent();
+  if(it.kind==="rest"){ const c=regionByName("charger"); setGoal("rest",regionCentroid(c),"rest"); say(it.why); }
+  else if(it.kind==="seek"){ setGoal("seek",{x:world.user.x,y:world.user.y},"seek you"); say(it.why); }
+  else if(it.kind==="explore"){ const rg=randomRegion(); setGoal("explore",regionCentroid(rg),"explore "+rg.name); say(it.why); }
+  else { const rg=randomRegion(); setGoal("wander",jitter(regionCentroid(rg)),"wander "+rg.name); }
+}
+function randomRegion(){ const rs=world.regions.filter(r=>r.name!=="charger"&&r.name!=="hall"); return rs[(Math.random()*rs.length)|0]; }
+function jitter(p){ return {x:clamp(p.x+(Math.random()-0.5)*1.5,0.4,W_M-0.4), y:clamp(p.y+(Math.random()-0.5)*1.0,0.4,H_M-0.4)}; }
+
+// Drive one tick along the path, with local avoidance vs the pet.
+function driveTick(){
+  const r=world.robot;
+  if(agent.state==="follow"){ agent.target={x:world.user.x,y:world.user.y};
+    agent.replanTimer-=TICK; if(agent.replanTimer<=0){ planTo(agent.target);} }
+  if(!agent.path.length||agent.wp>=agent.path.length){ if(agent.target&&agent.state!=="idle") arrive(); r.speed=0; return; }
+
+  let wp=agent.path[agent.wp];
+  // local reflex vs dynamic obstacles (the pet); static handled by the plan.
+  const av=steerAvoid(r.x,r.y,wp.x,wp.y,[world.pet]);
+  const aim=av.heading;
+  const yawErr=wrap(aim-r.yaw);
+  const tempo=moodTempo();
+  if(Math.abs(yawErr)>NAV.HEAD_TOL){
+    r.yaw=wrap(r.yaw+clampv(NAV.YAW_KP*yawErr,-NAV.YAW_LIMIT,NAV.YAW_LIMIT)*TICK);
+    r.speed=0;
+  } else {
+    const distGoal=agent.target?Math.hypot(agent.target.x-r.x,agent.target.y-r.y):1;
+    let v=Math.min(NAV.SPEED, NAV.KP*Math.max(distGoal,0.4)) * tempo * av.speed;
+    r.yaw=wrap(r.yaw+clampv(NAV.YAW_KP*yawErr,-NAV.YAW_LIMIT,NAV.YAW_LIMIT)*TICK*0.6);
+    r.x=clamp(r.x+v*Math.cos(r.yaw)*TICK,0.12,W_M-0.12);
+    r.y=clamp(r.y+v*Math.sin(r.yaw)*TICK,0.12,H_M-0.12);
+    r.speed=v;
+  }
+  // advance waypoint / arrival
+  if(Math.hypot(wp.x-r.x,wp.y-r.y)<NAV.ARRIVE){
+    agent.wp++;
+    if(agent.wp>=agent.path.length) { if(agent.state==="follow"){/*keep following*/} else arrive(); }
+  }
+  // stall recovery: no progress for ~1.5s while supposedly moving -> replan
+  const moved=Math.hypot(r.x-agent.lastPos.x,r.y-agent.lastPos.y);
+  agent.lastPos={x:r.x,y:r.y};
+  if(r.speed>0.01 && moved<0.004){ agent.stallTimer+=TICK; } else { agent.stallTimer=Math.max(0,agent.stallTimer-TICK); }
+  if(agent.stallTimer>1.5 && agent.target){ log("sys","stalled — re-planning"); planTo(agent.target); agent.stallTimer=0; }
+}
+const clampv=(v,lo,hi)=>v<lo?lo:v>hi?hi:v;
+
+// pet wanders slowly (a moving obstacle for the local reflex)
+function petTick(){
+  const p=world.pet; p.t-=TICK;
+  if(p.t<=0){ p.t=2+Math.random()*3; p.tx=clamp(6.2+Math.random()*5,6.4,W_M-0.5); p.ty=clamp(5.5+Math.random()*3,5.7,H_M-0.5); }
+  const dx=p.tx-p.x, dy=p.ty-p.y, d=Math.hypot(dx,dy);
+  const sp=0.45; if(d>0.05){ p.x+=sp*dx/d*TICK; p.y+=sp*dy/d*TICK; }
+}
+
+// =====================================================================
+// COMMAND PARSER — STUB.  <<< LLM SEAM >>>
+// In the Perchance port this becomes an aiTextPlugin tool-call that emits
+// {tool:"go_to_pose"|"speak"|..., args:{...}} which we dispatch identically.
+// =====================================================================
+function parseCommand(text){
+  const t=text.trim().toLowerCase(); if(!t) return;
+  log("say", text, true);
+  const coord=t.match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/);
+  if(/\b(stop|halt|stay|wait)\b/.test(t)){ setGoal("idle",null,"—"); say("okay, staying put"); return; }
+  if(/\b(come here|follow me|follow|heel)\b/.test(t)){ setGoal("follow",{x:world.user.x,y:world.user.y},"follow you"); mood.bond=clamp(mood.bond+8); say("on my way!"); return; }
+  if(/\b(patrol|patrolling|rounds)\b/.test(t)){ const rg=regionByName(agent.patrol[agent.patrolIx]); setGoal("patrol",regionCentroid(rg),"patrol→"+rg.name); say("starting patrol"); return; }
+  if(/\b(rest|sleep|charge|nap|recharge)\b/.test(t)){ const c=regionByName("charger"); setGoal("rest",regionCentroid(c),"rest"); say("good idea, recharging"); return; }
+  if(/\b(explore|wander|roam|look around)\b/.test(t)){ const rg=randomRegion(); setGoal("explore",regionCentroid(rg),"explore "+rg.name); mood.curiosity=clamp(mood.curiosity+10); say("exploring "+rg.name); return; }
+  if(coord){ const x=clamp(+coord[1],0.2,W_M-0.2), y=clamp(+coord[2],0.2,H_M-0.2); setGoal("goto",{x,y},`go to ${x.toFixed(1)},${y.toFixed(1)}`); say("heading there"); return; }
+  const goMatch=t.match(/\b(?:go(?:\s+to)?|head(?:\s+to)?|to)\s+(?:the\s+)?([a-z]+)/);
+  const rg = goMatch?regionByName(goMatch[1]):(regionByName(t)&&t.split(/\s+/).length<=2?regionByName(t):null);
+  if(rg){ setGoal("goto",regionCentroid(rg),"go to "+rg.name); say("heading to the "+rg.name); return; }
+  // not a command -> chat. Stubbed reply (this is where the LLM voices a line).
+  say(stubReply(t));
+}
+function stubReply(t){
+  const f=moodFlavour();
+  if(/\b(hi|hey|hello|yo)\b/.test(t)) return "hi! ("+f+")";
+  if(/\bgood (girl|bot|job)\b/.test(t)){ mood.bond=clamp(mood.bond+12); return "♥ ("+f+")"; }
+  if(t.includes("?")) return "hmm — I'm just a stub brain for now ("+f+")";
+  return "["+f+"] (LLM reply goes here)";
+}
+
+// ---- speech bubble + log -------------------------------------------
+function say(text){ agent.bubble={text, t:3.2}; log("say","Sweetie: "+text); }
+const logEl=document.getElementById("log");
+function log(kind,msg){
+  const e=document.createElement("div"); e.className="e "+(kind||"");
+  e.innerHTML="<b>"+(kind==="say"?"›":kind==="sys"?"⚙":"·")+"</b> "+escapeHtml(msg);
+  logEl.appendChild(e); while(logEl.childNodes.length>60) logEl.removeChild(logEl.firstChild);
+  logEl.scrollTop=logEl.scrollHeight;
+}
+function escapeHtml(s){return s.replace(/[<>&]/g,m=>({"<":"&lt;",">":"&gt;","&":"&amp;"}[m]));}
+
+// =====================================================================
+// RENDER
+// =====================================================================
+const cv=document.getElementById("map"), ctx=cv.getContext("2d");
+const X=x=>x*PX, Y=y=>y*PX;
+function draw(){
+  ctx.clearRect(0,0,cv.width,cv.height);
+  // floor grid
+  ctx.fillStyle="#0c1213"; ctx.fillRect(0,0,cv.width,cv.height);
+  // regions
+  for(const r of world.regions){
+    ctx.fillStyle=r.color; ctx.globalAlpha=0.55; ctx.fillRect(X(r.x),Y(r.y),X(r.w),Y(r.h)); ctx.globalAlpha=1;
+    ctx.strokeStyle="#23332f"; ctx.lineWidth=1; ctx.strokeRect(X(r.x),Y(r.y),X(r.w),Y(r.h));
+    ctx.fillStyle="#5b6b68"; ctx.font="10px ui-monospace,monospace";
+    ctx.fillText(r.name.toUpperCase(), X(r.x)+5, Y(r.y)+13);
+  }
+  // grid dots
+  ctx.fillStyle="#13201e";
+  for(let j=0;j<GH;j++)for(let i=0;i<GW;i++){ if(GRID[j*GW+i]) {ctx.fillRect(X(i*CELL),Y(j*CELL),X(CELL)-1,Y(CELL)-1);} }
+  // obstacles
+  for(const o of world.obstacles){
+    ctx.beginPath(); ctx.arc(X(o.x),Y(o.y),X(o.r),0,7); ctx.fillStyle="#26323a"; ctx.fill();
+    ctx.strokeStyle="#3b4c54"; ctx.lineWidth=1.5; ctx.stroke();
+  }
+  // path
+  if(agent.path.length>1){
+    ctx.strokeStyle="rgba(84,214,182,.5)"; ctx.lineWidth=2; ctx.setLineDash([5,5]);
+    ctx.beginPath(); ctx.moveTo(X(world.robot.x),Y(world.robot.y));
+    for(let k=agent.wp;k<agent.path.length;k++) ctx.lineTo(X(agent.path[k].x),Y(agent.path[k].y));
+    ctx.stroke(); ctx.setLineDash([]);
+    for(let k=agent.wp;k<agent.path.length;k++){ ctx.fillStyle="rgba(84,214,182,.8)"; ctx.beginPath(); ctx.arc(X(agent.path[k].x),Y(agent.path[k].y),2.5,0,7); ctx.fill(); }
+  }
+  if(agent.target){ ctx.strokeStyle="#e8a33d"; ctx.lineWidth=1.5; ctx.beginPath(); ctx.arc(X(agent.target.x),Y(agent.target.y),7,0,7); ctx.stroke(); cross(agent.target.x,agent.target.y,"#e8a33d"); }
+  // user avatar
+  drawUser(world.user.x,world.user.y);
+  // pet
+  ctx.beginPath(); ctx.arc(X(world.pet.x),Y(world.pet.y),X(world.pet.r),0,7); ctx.fillStyle="#6a5acd"; ctx.fill();
+  ctx.fillStyle="#b9b0ee"; ctx.font="9px ui-monospace"; ctx.fillText("pet",X(world.pet.x)-7,Y(world.pet.y)-X(world.pet.r)-3);
+  // robot (directional)
+  drawRobot();
+  // bubble
+  if(agent.bubble){ bubble(world.robot.x,world.robot.y,agent.bubble.text); }
+}
+function drawRobot(){
+  const r=world.robot, px=X(r.x),py=Y(r.y), rad=X(ROBOT_R);
+  ctx.save(); ctx.translate(px,py); ctx.rotate(r.yaw);
+  // glow when moving
+  ctx.beginPath(); ctx.arc(0,0,rad+4,0,7); ctx.fillStyle=r.speed>0.05?"rgba(232,163,61,.12)":"rgba(120,140,137,.08)"; ctx.fill();
+  ctx.beginPath(); ctx.arc(0,0,rad,0,7); ctx.fillStyle="#e8a33d"; ctx.fill();
+  ctx.strokeStyle="#1a120a"; ctx.lineWidth=2; ctx.stroke();
+  // nose
+  ctx.beginPath(); ctx.moveTo(rad-2,0); ctx.lineTo(rad+7,0); ctx.strokeStyle="#1a120a"; ctx.lineWidth=3; ctx.stroke();
+  ctx.restore();
+  ctx.fillStyle="#0a0d0e"; ctx.font="bold 10px ui-monospace"; ctx.textAlign="center"; ctx.fillText("S",px,py+3.5); ctx.textAlign="left";
+}
+function drawUser(x,y){
+  const px=X(x),py=Y(y);
+  ctx.beginPath(); ctx.arc(px,py,7,0,7); ctx.fillStyle="#54d6b6"; ctx.fill(); ctx.strokeStyle="#0c1f1b"; ctx.lineWidth=2; ctx.stroke();
+  ctx.fillStyle="#54d6b6"; ctx.font="9px ui-monospace"; ctx.fillText("you",px-9,py-11);
+}
+function cross(x,y,c){ ctx.strokeStyle=c; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(X(x)-4,Y(y)); ctx.lineTo(X(x)+4,Y(y)); ctx.moveTo(X(x),Y(y)-4); ctx.lineTo(X(x),Y(y)+4); ctx.stroke(); }
+function bubble(x,y,text){
+  const px=X(x),py=Y(y)-X(ROBOT_R)-10; ctx.font="11px ui-monospace";
+  const w=ctx.measureText(text).width+14, h=18;
+  ctx.fillStyle="rgba(17,23,26,.95)"; ctx.strokeStyle="#3a2e16"; ctx.lineWidth=1;
+  roundRect(px-w/2,py-h,w,h,5); ctx.fill(); ctx.stroke();
+  ctx.fillStyle="#e8d8b8"; ctx.textAlign="center"; ctx.fillText(text,px,py-5); ctx.textAlign="left";
+}
+function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+
+// ---- HUD -----------------------------------------------------------
+const moodsEl=document.getElementById("moods");
+MOOD_KEYS.forEach(k=>{
+  const row=document.createElement("div"); row.className="moodrow";
+  row.innerHTML=`<span class="lbl">${k}</span><span class="bar"><i id="m_${k}"></i></span><span class="val" id="v_${k}"></span>`;
+  moodsEl.appendChild(row);
+});
+function drawHud(fps){
+  for(const k of MOOD_KEYS){
+    const v=mood[k]|0; const bar=document.getElementById("m_"+k);
+    bar.style.width=v+"%"; bar.style.background=`var(${MOOD_COL[k]})`;
+    document.getElementById("v_"+k).textContent=v;
+  }
+  document.getElementById("stateName").textContent=agent.state.toUpperCase();
+  document.getElementById("stateSpeed").textContent=world.robot.speed>0.05?`· ${world.robot.speed.toFixed(2)} m/s`:"· idle";
+  document.getElementById("goalLine").textContent=
+    (agent.state==="idle"? "💭 "+moodIntent().why : "▸ "+agent.goalName);
+  document.getElementById("fps").textContent=fps+" fps";
+}
+
+// =====================================================================
+// LOOP  (fixed-timestep logic, rAF render)
+// =====================================================================
+let paused=false, acc=0, last=performance.now(), frames=0, fpsT=0, fps=0;
+function frame(now){
+  const dt=Math.min(0.1,(now-last)/1000); last=now;
+  if(!paused){
+    acc+=dt;
+    while(acc>=TICK){ moodDecay(TICK); petTick(); autonomyTick(); driveTick();
+      if(agent.bubble){ agent.bubble.t-=TICK; if(agent.bubble.t<=0) agent.bubble=null; } acc-=TICK; }
+  }
+  draw();
+  frames++; fpsT+=dt; if(fpsT>=0.5){ fps=Math.round(frames/fpsT); frames=0; fpsT=0; }
+  drawHud(fps);
+  requestAnimationFrame(frame);
+}
+
+// ---- input ---------------------------------------------------------
+cv.addEventListener("click",e=>{
+  const rect=cv.getBoundingClientRect(); const x=(e.clientX-rect.left)/PX, y=(e.clientY-rect.top)/PX;
+  if(e.shiftKey){ world.user.x=clamp(x,0.2,W_M-0.2); world.user.y=clamp(y,0.2,H_M-0.2); log("sys","you moved"); if(agent.state==="follow"||agent.state==="seek") planTo({x:world.user.x,y:world.user.y}); return; }
+  setGoal("goto",{x:clamp(x,0.2,W_M-0.2),y:clamp(y,0.2,H_M-0.2)},`go to ${x.toFixed(1)},${y.toFixed(1)}`); say("heading there");
+});
+const sayInput=document.getElementById("say");
+function send(){ const v=sayInput.value; if(v.trim()){ parseCommand(v); sayInput.value=""; } }
+document.getElementById("sayBtn").onclick=send;
+sayInput.addEventListener("keydown",e=>{ if(e.key==="Enter") send(); });
+document.querySelectorAll("button[data-cmd]").forEach(b=> b.onclick=()=>parseCommand(b.dataset.cmd));
+document.getElementById("pauseBtn").onclick=function(){ paused=!paused; this.textContent=paused?"Resume":"Pause"; };
+document.getElementById("resetBtn").onclick=()=>{ Object.assign(mood,{energy:78,bond:64,curiosity:58,restlessness:30});
+  world.robot.x=1;world.robot.y=2;world.robot.yaw=0; setGoal("idle",null,"—"); logEl.innerHTML=""; log("sys","reset"); };
+
+// ---- boot ----------------------------------------------------------
+log("sys","Sweetie online — mood drives idle roaming; type or click to assign goals");
+agent.lastPos={x:world.robot.x,y:world.robot.y};
+setGoal("idle",null,"—");
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
