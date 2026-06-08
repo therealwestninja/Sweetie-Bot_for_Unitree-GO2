@@ -16,10 +16,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import os
 import time
 from collections import deque
 from dataclasses import dataclass, field
 
+from sweetie.core.avoidance import AvoidanceConfig
+from sweetie.core.avoidance import steer as avoid_steer
 from sweetie.core.bus import bus
 from sweetie.sim.perception import SimPerception
 from sweetie.sim.world import PROXIMITY_MAX_RANGE, Observer, World
@@ -149,6 +152,26 @@ class SimBridge(BridgeBase):
         self._perception: SimPerception | None = (
             SimPerception(world) if world is not None else None
         )
+        # Local obstacle avoidance — a reactive steering reflex that bends
+        # nav headings around solid obstacles the LLM's straight-line
+        # waypoint would otherwise cross. Default on; disable with
+        # SWEETIE_NAV_AVOIDANCE=off to get the old press-into-it behaviour.
+        # See core/avoidance.py. Sim-only: RealBridge refuses nav entirely
+        # until a real planner exists, so there's nothing to wrap there.
+        self._avoidance = os.getenv("SWEETIE_NAV_AVOIDANCE", "on").lower() != "off"
+        self._avoid_cfg = AvoidanceConfig()
+
+    def _solid_obstacles(self) -> list[tuple[float, float, float]]:
+        """(x, y, radius) for world objects that physically block motion.
+
+        Passable terrain (slopes, gravel — `obstacle=False`) is excluded,
+        same as `proximity_ranges`. Empty when there's no world.
+        """
+        if self._world is None:
+            return []
+        return [
+            (o.x, o.y, o.radius) for o in self._world.objects if o.obstacle
+        ]
 
     @property
     def world(self) -> World | None:
@@ -247,10 +270,15 @@ class SimBridge(BridgeBase):
         arrival, on `halt`, on `emergency_stop`, on any operator move
         with nonzero velocity, or by another `go_to_pose`.
 
-        No path-planning. No obstacle avoidance beyond the safety
-        guard's reactive slowdown. If the straight line crosses solid
-        furniture, the robot will press into it and be slowed to a halt
-        — same as if the operator joysticked into a wall.
+        No global path-planning. A *local* obstacle-avoidance reflex
+        (core/avoidance.py, default on; SWEETIE_NAV_AVOIDANCE=off to
+        disable) bends the heading around solid obstacles the straight
+        line would cross and slows for tight passes, with the safety
+        guard's proximity scaling underneath. It handles isolated
+        obstacles and passable fields; it can stall against a wall or in
+        a concave pocket (no local detour exists), in which case the
+        robot stops making progress and the LLM can choose a new target.
+        It never drives *into* an obstacle.
         """
         if self._state.mode in ("estop", "down"):
             return False
@@ -346,7 +374,22 @@ class SimBridge(BridgeBase):
                 s.vx = s.vy = s.vyaw = 0.0
                 s.mode = "standing"
             else:
-                target_yaw = math.atan2(dy, dx)
+                # Local obstacle avoidance bends the heading around any
+                # solid obstacle the straight line would cross, and may
+                # recommend slowing so the turn lands in time. Falls back
+                # to the straight bearing when disabled or the corridor is
+                # clear. This is a reactive reflex *under* the LLM's
+                # waypoint, not a planner — see core/avoidance.py.
+                nav_speed_scale = 1.0
+                if self._avoidance and self._world is not None:
+                    res = avoid_steer(
+                        s.x, s.y, tx, ty,
+                        self._solid_obstacles(), self._avoid_cfg,
+                    )
+                    target_yaw = res.heading
+                    nav_speed_scale = res.speed_scale
+                else:
+                    target_yaw = math.atan2(dy, dx)
                 yaw_err = _wrap_pi(target_yaw - s.yaw)
                 if abs(yaw_err) > NAV_HEADING_TOLERANCE:
                     # Turn toward target before driving forward.
@@ -354,8 +397,11 @@ class SimBridge(BridgeBase):
                     s.vy = 0.0
                     s.vyaw = max(-VYAW_LIMIT, min(VYAW_LIMIT, YAW_KP * yaw_err))
                 else:
-                    # Drive forward, decelerating on approach.
-                    speed = min(NAV_SPEED, NAV_KP * dist)
+                    # Drive forward, decelerating on approach. The
+                    # avoidance speed scale (≤1) gives a tight turn time
+                    # to complete; the safety guard's proximity scaling
+                    # still applies on top, downstream.
+                    speed = min(NAV_SPEED, NAV_KP * dist) * nav_speed_scale
                     s.vx = speed
                     s.vy = 0.0
                     # Gentle heading correction while driving.
