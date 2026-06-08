@@ -39,12 +39,7 @@ VISION_HALF_FOV_RAD = _math.radians(VISION_FOV_DEG / 2.0)
 MIN_STATIC_VISION_RADIUS = 0.1
 
 
-def _wrap(a: float) -> float:
-    while a > _math.pi:
-        a -= 2 * _math.pi
-    while a < -_math.pi:
-        a += 2 * _math.pi
-    return a
+from sweetie.core.mathutil import wrap_angle as _wrap
 
 
 class SimPerception(PerceptionBase):

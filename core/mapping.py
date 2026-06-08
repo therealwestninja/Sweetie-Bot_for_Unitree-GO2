@@ -24,6 +24,7 @@ perception; this module consumes the planar scan.
 """
 
 from __future__ import annotations
+from sweetie.core.mathutil import clamp
 
 import math
 from dataclasses import dataclass
@@ -93,7 +94,7 @@ class OccupancyGrid:
         if not self.in_bounds(cx, cy):
             return
         v = self._lo[cy][cx] + delta
-        self._lo[cy][cx] = max(L_MIN, min(L_MAX, v))
+        self._lo[cy][cx] = clamp(v, L_MIN, L_MAX)
 
     def integrate_scan(self, x: float, y: float, yaw: float, scan: Scan) -> None:
         """Fuse one planar scan taken at robot pose (x, y, yaw)."""

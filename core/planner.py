@@ -13,6 +13,7 @@ No third-party deps.
 """
 
 from __future__ import annotations
+from sweetie.core.mathutil import clamp
 
 import heapq
 import math
@@ -42,8 +43,8 @@ class GridView:
     def cell_of(self, x: float, y: float) -> tuple[int, int]:
         i = int(math.floor((x - self.ox) / self.res))
         j = int(math.floor((y - self.oy) / self.res))
-        i = max(0, min(self.gw - 1, i))
-        j = max(0, min(self.gh - 1, j))
+        i = clamp(i, 0, self.gw - 1)
+        j = clamp(j, 0, self.gh - 1)
         return i, j
 
     def center(self, i: int, j: int) -> tuple[float, float]:
@@ -181,3 +182,18 @@ def plan_on_occupancy(occ, start: tuple[float, float], goal: tuple[float, float]
     blocked = occ.blocked_grid(inflate_radius=inflate_radius, unknown_blocked=unknown_blocked)
     grid = GridView(blocked, occ.res, occ.origin_x, occ.origin_y)
     return plan_path(grid, start, goal)
+
+
+def to_grid_view(grid_or_occ, inflate_radius: float = DEFAULT_ROBOT_R):
+    """Normalize a grid source to a planner GridView.
+
+    Accepts an existing GridView (returned as-is) or a mapping.OccupancyGrid
+    (wrapped into an inflated GridView for clearance). None -> None.
+    """
+    if grid_or_occ is None:
+        return None
+    if hasattr(grid_or_occ, "blocked_grid"):  # OccupancyGrid
+        g = grid_or_occ
+        return GridView(g.blocked_grid(inflate_radius=inflate_radius),
+                        g.res, g.origin_x, g.origin_y)
+    return grid_or_occ

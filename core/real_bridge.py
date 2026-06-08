@@ -38,6 +38,8 @@ What this bridge intentionally does NOT do:
 """
 
 from __future__ import annotations
+from sweetie.core.mathutil import clamp
+from sweetie.core.navgrid import NavGridMixin
 
 import asyncio
 import copy
@@ -117,7 +119,7 @@ def _import_sdk() -> dict[str, Any]:
     }
 
 
-class RealBridge(BridgeBase):
+class RealBridge(NavGridMixin, BridgeBase):
     """
     Bridge to a real Unitree Go2 over DDS via unitree_sdk2py.
 
@@ -160,6 +162,12 @@ class RealBridge(BridgeBase):
         # nav grid is the live LiDAR map so go_to_pose/plan_to route on it.
         self._enable_lidar_map = bool(enable_lidar_map)
         self._lidar_mapper = None
+
+        # The unitree_sdk2py client is not concurrency-safe: overlapping calls
+        # (LLM tool + joystick, autonomy + supervisor) can race the SDK. Serialize
+        # every SDK call through this lock. (Lesson from field reports of the
+        # Python SDK needing a serializing wrapper.)
+        self._sdk_lock = asyncio.Lock()
 
         # Populated in connect().
         self._sport: Any = None
@@ -370,9 +378,9 @@ class RealBridge(BridgeBase):
             return False
         # Bridge-side clamp as defense-in-depth. The safety guard already
         # clamped, but a buggy caller shouldn't be able to floor it.
-        cvx = max(-VX_LIMIT, min(VX_LIMIT, float(vx)))
-        cvy = max(-VY_LIMIT, min(VY_LIMIT, float(vy)))
-        cvyaw = max(-VYAW_LIMIT, min(VYAW_LIMIT, float(vyaw)))
+        cvx = clamp(float(vx), -VX_LIMIT, VX_LIMIT)
+        cvy = clamp(float(vy), -VY_LIMIT, VY_LIMIT)
+        cvyaw = clamp(float(vyaw), -VYAW_LIMIT, VYAW_LIMIT)
         return await self._sdk_call(self._sport.Move, cvx, cvy, cvyaw)
 
     async def stop_move(self) -> bool:
@@ -419,7 +427,7 @@ class RealBridge(BridgeBase):
         from sweetie.core.bridge import (
             BODY_HEIGHT_DEFAULT, BODY_HEIGHT_MIN, BODY_HEIGHT_MAX,
         )
-        clamped = max(BODY_HEIGHT_MIN, min(BODY_HEIGHT_MAX, float(meters)))
+        clamped = clamp(float(meters), BODY_HEIGHT_MIN, BODY_HEIGHT_MAX)
         offset = clamped - BODY_HEIGHT_DEFAULT
         ok = await self._sdk_call(self._sport.BodyHeight, offset)
         if ok:
@@ -439,34 +447,6 @@ class RealBridge(BridgeBase):
         with self._state_lock:
             x, y, yaw = self._state.x, self._state.y, self._state.yaw
         return self._lidar_mapper.ingest(msg, x, y, yaw)
-
-    def set_nav_grid(self, grid_or_provider) -> None:
-        """Give the bridge a map so it can plan routes. Accepts a planner
-        GridView, a mapping.OccupancyGrid (LiDAR/SLAM), or a zero-arg callable
-        returning one. Execution of a planned route is done by
-        `core.navigator.Navigator`, which routes motion through SafetyGuard."""
-        self._nav_grid = grid_or_provider
-
-    def _resolve_grid(self):
-        g = self._nav_grid() if callable(self._nav_grid) else self._nav_grid
-        if g is None:
-            return None
-        if hasattr(g, "blocked_grid"):  # OccupancyGrid -> inflated GridView
-            from sweetie.core.planner import GridView, DEFAULT_ROBOT_R
-            return GridView(g.blocked_grid(inflate_radius=DEFAULT_ROBOT_R),
-                            g.res, g.origin_x, g.origin_y)
-        return g
-
-    async def plan_to(self, x: float, y: float):
-        """Plan a route from the current pose to (x, y); world waypoints or None.
-        Pure planning — does not move the robot. The Navigator follows the path
-        and is the only thing that issues motion (through SafetyGuard)."""
-        grid = self._resolve_grid()
-        if grid is None:
-            return None
-        from sweetie.core.planner import plan_path
-        st = await self.get_state()
-        return plan_path(grid, (st.x, st.y), (x, y))
 
     async def go_to_pose(self, x: float, y: float) -> bool:
         # The bridge is intentionally "dumb": it never runs a motion loop,
@@ -594,7 +574,8 @@ class RealBridge(BridgeBase):
         """
         loop = asyncio.get_event_loop()
         try:
-            result = await loop.run_in_executor(None, fn, *args)
+            async with self._sdk_lock:
+                result = await loop.run_in_executor(None, fn, *args)
         except Exception:
             logger.exception("RealBridge: SDK call %s raised", getattr(fn, "__name__", fn))
             return False

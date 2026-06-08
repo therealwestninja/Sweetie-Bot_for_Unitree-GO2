@@ -25,12 +25,7 @@ from __future__ import annotations
 import math
 
 
-def _wrap(a: float) -> float:
-    while a > math.pi:
-        a -= 2 * math.pi
-    while a < -math.pi:
-        a += 2 * math.pi
-    return a
+from sweetie.core.mathutil import clamp, wrap_angle as _wrap
 
 
 class Navigator:
@@ -66,13 +61,8 @@ class Navigator:
 
     def _grid(self):
         g = self.grid_provider() if callable(self.grid_provider) else self.grid_provider
-        if g is None:
-            return None
-        if hasattr(g, "blocked_grid"):  # an OccupancyGrid -> GridView, inflated for clearance
-            from sweetie.core.planner import GridView, DEFAULT_ROBOT_R
-            return GridView(g.blocked_grid(inflate_radius=DEFAULT_ROBOT_R),
-                            g.res, g.origin_x, g.origin_y)
-        return g
+        from sweetie.core.planner import to_grid_view
+        return to_grid_view(g)
 
     async def goto(self, x: float, y: float) -> bool:
         """Plan a route from the current pose to (x, y). True if a path exists."""
@@ -155,7 +145,7 @@ class Navigator:
 
         tx, ty = self.path[self.wp]
         yaw_err = _wrap(math.atan2(ty - y, tx - x) - yaw)
-        vyaw = max(-self.yaw_limit, min(self.yaw_limit, self.yaw_kp * yaw_err))
+        vyaw = clamp(self.yaw_kp * yaw_err, -self.yaw_limit, self.yaw_limit)
         if abs(yaw_err) > self.head_tol:
             sent = await self._drive(0.0, 0.0, vyaw, st)          # turn in place
         else:

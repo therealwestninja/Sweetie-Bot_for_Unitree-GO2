@@ -61,6 +61,7 @@ downside either way.
 """
 
 from __future__ import annotations
+from sweetie.core.mathutil import clamp
 
 import asyncio
 import logging
@@ -139,7 +140,7 @@ class Autonomy:
         # The urgent floor can never exceed the normal cooldown — if a
         # caller sets a tiny cooldown, urgent shouldn't be *slower* than
         # normal.
-        self._urgent_min_gap_s = max(0.0, min(urgent_min_gap_s, self._cooldown_s))
+        self._urgent_min_gap_s = clamp(urgent_min_gap_s, 0.0, self._cooldown_s)
 
         self._last_tick: float = 0.0  # monotonic seconds, set on tick start
         self._lock = asyncio.Lock()

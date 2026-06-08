@@ -26,15 +26,51 @@ import math
 from sweetie.core.mapping import OccupancyGrid
 from sweetie.core.planner import GridView, DEFAULT_ROBOT_R
 
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Optional real decoder. The community WebRTC drivers (go2_webrtc_connect /
+# unitree_webrtc_connect) ship a verified LiDAR point-cloud decoder; register it
+# here on hardware so we use the real wire format instead of the tolerant
+# best-effort fallback. The callable takes the raw message and returns an
+# iterable of (x, y, z) points (or point objects with .x/.y/.z).
+_DECODER = None
+
+
+def register_voxel_decoder(fn) -> None:
+    """Install a real voxel-map decoder (e.g. from go2_webrtc_connect)."""
+    global _DECODER
+    _DECODER = fn
+
+
+def _normalize_points(pts) -> list[tuple[float, float, float]]:
+    out = []
+    for p in pts:
+        try:
+            out.append((float(p.x), float(p.y), float(p.z)))
+        except AttributeError:
+            if len(p) >= 3:
+                out.append((float(p[0]), float(p[1]), float(p[2])))
+    return out
+
 
 def decode_voxel_map(msg) -> list[tuple[float, float, float]]:
     """Best-effort decode of a Go2 voxel-map message into (x, y, z) points.
 
-    Returns map-frame points (metres). Unrecognised shapes -> empty list (the
-    caller simply integrates nothing that frame). Tolerant by design — see note.
+    If a real decoder has been registered (recommended on hardware), use it
+    first. Otherwise fall back to tolerant parsing of common shapes. Returns
+    map-frame points (metres); unrecognised shapes -> empty list. See note.
     """
     if msg is None:
         return []
+    if _DECODER is not None:
+        try:
+            pts = _DECODER(msg)
+            if pts:
+                return _normalize_points(pts)
+        except Exception:
+            logger.exception("registered voxel decoder failed; using fallback")
     # 1) already a sequence of points
     if isinstance(msg, (list, tuple)) and msg and isinstance(msg[0], (list, tuple)):
         return [(float(p[0]), float(p[1]), float(p[2])) for p in msg if len(p) >= 3]

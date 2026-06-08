@@ -102,12 +102,7 @@ class SteerResult:
     speed_scale: float = 1.0
 
 
-def _wrap_pi(a: float) -> float:
-    while a > math.pi:
-        a -= 2 * math.pi
-    while a < -math.pi:
-        a += 2 * math.pi
-    return a
+from sweetie.core.mathutil import clamp, wrap_angle as _wrap_pi
 
 
 def steer(
@@ -211,7 +206,7 @@ def steer(
     # Speed recommendation: full speed while the blocker is a look-ahead
     # away, ramping to the floor as it closes, so the turn has time to
     # land before the robot reaches it.
-    ramp = max(0.0, min(1.0, edge_d / cfg.lookahead))
+    ramp = clamp(edge_d / cfg.lookahead, 0.0, 1.0)
     speed_scale = cfg.speed_floor + (1.0 - cfg.speed_floor) * ramp
 
     return SteerResult(

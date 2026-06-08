@@ -18,7 +18,6 @@ import logging
 import math
 import os
 import time
-from collections import deque
 from dataclasses import dataclass, field
 
 from sweetie.core.avoidance import AvoidanceConfig
@@ -41,9 +40,7 @@ YAW_KP = 2.5
 YAW_GOAL_TOLERANCE = math.radians(3.0)
 
 
-def _wrap_pi(angle: float) -> float:
-    """Wrap an angle to [-pi, pi]."""
-    return ((angle + math.pi) % (2 * math.pi)) - math.pi
+from sweetie.core.mathutil import clamp, wrap_angle as _wrap_pi
 
 
 @dataclass
@@ -221,9 +218,9 @@ class SimBridge(BridgeBase):
         if any((vx, vy, vyaw)):
             self._nav_target = None
         # Clamp at the bridge as defense-in-depth.
-        self._state.vx = max(-VX_LIMIT, min(VX_LIMIT, vx))
-        self._state.vy = max(-VY_LIMIT, min(VY_LIMIT, vy))
-        self._state.vyaw = max(-VYAW_LIMIT, min(VYAW_LIMIT, vyaw))
+        self._state.vx = clamp(vx, -VX_LIMIT, VX_LIMIT)
+        self._state.vy = clamp(vy, -VY_LIMIT, VY_LIMIT)
+        self._state.vyaw = clamp(vyaw, -VYAW_LIMIT, VYAW_LIMIT)
         self._state.mode = "moving" if any((vx, vy, vyaw)) else "standing"
         return True
 
@@ -284,7 +281,7 @@ class SimBridge(BridgeBase):
         """
         if self._state.mode == "down":
             return False
-        clamped = max(BODY_HEIGHT_MIN, min(BODY_HEIGHT_MAX, meters))
+        clamped = clamp(meters, BODY_HEIGHT_MIN, BODY_HEIGHT_MAX)
         self._state.body_height = clamped
         return True
 
@@ -385,7 +382,7 @@ class SimBridge(BridgeBase):
             else:
                 s.vx = 0.0
                 s.vy = 0.0
-                s.vyaw = max(-VYAW_LIMIT, min(VYAW_LIMIT, YAW_KP * err))
+                s.vyaw = clamp(YAW_KP * err, -VYAW_LIMIT, VYAW_LIMIT)
 
         # If a nav target is active, compute desired vx / vyaw to drive
         # toward it. Yaw target takes precedence (above) — they shouldn't
@@ -422,7 +419,7 @@ class SimBridge(BridgeBase):
                     # Turn toward target before driving forward.
                     s.vx = 0.0
                     s.vy = 0.0
-                    s.vyaw = max(-VYAW_LIMIT, min(VYAW_LIMIT, YAW_KP * yaw_err))
+                    s.vyaw = clamp(YAW_KP * yaw_err, -VYAW_LIMIT, VYAW_LIMIT)
                 else:
                     # Drive forward, decelerating on approach. The
                     # avoidance speed scale (≤1) gives a tight turn time
@@ -432,7 +429,7 @@ class SimBridge(BridgeBase):
                     s.vx = speed
                     s.vy = 0.0
                     # Gentle heading correction while driving.
-                    s.vyaw = max(-VYAW_LIMIT, min(VYAW_LIMIT, 0.5 * yaw_err))
+                    s.vyaw = clamp(0.5 * yaw_err, -VYAW_LIMIT, VYAW_LIMIT)
 
         # Pose integration in world frame.
         cos_y, sin_y = math.cos(s.yaw), math.sin(s.yaw)

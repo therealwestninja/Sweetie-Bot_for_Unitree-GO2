@@ -25,6 +25,7 @@ internals — the public surface (guard, arm, estop, etc.) doesn't change.
 """
 
 from __future__ import annotations
+from sweetie.core.mathutil import clamp
 
 import enum
 import logging
@@ -193,9 +194,9 @@ class SafetyGuard:
             return GuardResult(False, "no heartbeat (send heartbeat to ACTIVATE)")
 
         # ACTIVE — clamp to the absolute envelope first.
-        cvx = max(-VX_LIMIT, min(VX_LIMIT, float(vx)))
-        cvy = max(-VY_LIMIT, min(VY_LIMIT, float(vy)))
-        cvyaw = max(-VYAW_LIMIT, min(VYAW_LIMIT, float(vyaw)))
+        cvx = clamp(float(vx), -VX_LIMIT, VX_LIMIT)
+        cvy = clamp(float(vy), -VY_LIMIT, VY_LIMIT)
+        cvyaw = clamp(float(vyaw), -VYAW_LIMIT, VYAW_LIMIT)
 
         assists: list[str] = []
 

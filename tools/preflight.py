@@ -39,7 +39,7 @@ import logging
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 logger = logging.getLogger("sweetie.preflight")
 

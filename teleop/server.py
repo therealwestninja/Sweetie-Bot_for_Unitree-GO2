@@ -29,7 +29,7 @@ from sweetie.cognition.llm import Cognition
 from sweetie.core.bridge import BridgeBase, SimBridge
 from sweetie.core.bus import bus
 from sweetie.core.safety import SafetyGuard
-from sweetie.sim.world import World, default_scene
+from sweetie.sim.world import World
 
 logging.basicConfig(
     level=logging.INFO,

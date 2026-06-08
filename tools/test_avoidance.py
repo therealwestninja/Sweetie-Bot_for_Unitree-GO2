@@ -33,7 +33,7 @@ import math
 
 import pytest
 
-from sweetie.core.avoidance import AvoidanceConfig, SteerResult, steer
+from sweetie.core.avoidance import AvoidanceConfig, steer
 
 
 # ── Faithful nav + safety integration harness ────────────────────────────────

@@ -459,13 +459,12 @@ async def test_summarize_session_returns_none_without_api_key(monkeypatch, tmp_p
 async def test_battery_low_ends_session_exactly_once(monkeypatch, tmp_path):
     """When battery drops below threshold, _end_session fires once.
     Subsequent battery-low ticks must not fire it again."""
-    from sweetie.core.safety import BATTERY_LOW_PERCENT
     monkeypatch.setenv("SWEETIE_MEMORY_DB", str(tmp_path / "m.db"))
     monkeypatch.setenv("SWEETIE_AUTONOMY", "off")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
     # Reload server module fresh — it reads env at import time.
-    import importlib, sys
+    import sys
     for mod in list(sys.modules.keys()):
         if mod.startswith("sweetie."):
             del sys.modules[mod]

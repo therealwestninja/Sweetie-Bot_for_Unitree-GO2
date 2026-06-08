@@ -14,7 +14,6 @@ decides *what* to do. These tests only exercise the former.
 from __future__ import annotations
 
 import asyncio
-import time
 
 import pytest
 
