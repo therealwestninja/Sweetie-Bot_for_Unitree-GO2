@@ -1,0 +1,11 @@
+{
+  "name": "browser-sweetie",
+  "version": "0.0.1",
+  "type": "module",
+  "private": true,
+  "description": "Browser reimplementation of the Sweetie Go2 companion, driven by the JS spiking brain. Zero build step.",
+  "scripts": {
+    "//test": "No local deps yet — reuse the brain's installed vitest:",
+    "test": "cd ../../brain && npx vitest run --root=../sweetie-bot/browser-sweetie"
+  }
+}

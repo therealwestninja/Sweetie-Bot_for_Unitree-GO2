@@ -1,0 +1,691 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Round Table — colony</title>
+<style>
+  :root{ --bg:#0b0d12; --panel:#12151d; --line:#232838; --ink:#e6e9f0; --dim:#8891a6; --gold:#e5c46b; --info:#6ea8ff; --ok:#63d29b; --err:#e2607a; --warn:#e8b04b; }
+  *{ box-sizing:border-box; } body{ margin:0; background:var(--bg); color:var(--ink); font:13px/1.5 ui-sans-serif,system-ui,Segoe UI,Roboto,sans-serif; }
+  header{ display:flex; align-items:center; gap:14px; padding:9px 14px; border-bottom:1px solid var(--line); background:linear-gradient(180deg,#141824,#0f1219); }
+  header b{ color:var(--gold); letter-spacing:.4px; } header .m{ color:var(--dim); font-size:12px; }
+  header .m span{ color:var(--ink); font-weight:600; }
+  main{ display:grid; grid-template-columns:1fr 340px; gap:12px; padding:12px; height:calc(100vh - 48px); }
+  .card{ background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px; min-height:0; }
+  .map{ padding:0; overflow:hidden; position:relative; } svg{ width:100%; height:100%; display:block; }
+  .side{ display:flex; flex-direction:column; gap:12px; min-height:0; overflow-y:auto; } /* scroll rather than crush the cards when they outgrow the viewport */
+  h3{ margin:0 0 8px; font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.6px; }
+  .ctl{ display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+  button,select,input{ background:#1b1f2b; color:var(--ink); border:1px solid var(--line); border-radius:7px; padding:6px 9px; font:inherit; font-size:12px; cursor:pointer; }
+  button.on{ background:#243b52; color:var(--info); border-color:var(--info); }
+  .log{ flex:1; overflow:auto; font-size:12px; display:flex; flex-direction:column; gap:2px; }
+  .log .ln{ display:flex; gap:6px; } .log .tag{ color:var(--dim); min-width:64px; font-size:10px; text-transform:uppercase; }
+  .log .gossip{ color:var(--dim); font-style:italic; } .log .megaphone{ color:var(--gold); font-weight:600; }
+  .log .booth{ color:var(--info); } .log .move{ color:#9a86d6; } .log .user{ color:var(--ok); }
+  .log .charge{ color:var(--warn); } .log .cooler{ color:#4ec6c9; font-style:italic; } .log .system{ color:var(--err); } .log .watch{ color:#c98bff; font-weight:600; }
+  .log .snub{ color:var(--err); } .log .friction{ color:#e8894b; } .log .brood{ color:#9a86d6; font-style:italic; }
+  .log .amends{ color:var(--ok); font-weight:600; } .log .confront{ color:var(--err); font-weight:600; } .log .wander{ color:#63c2d2; } .log .give-up{ color:var(--dim); font-style:italic; }
+  .log .rebuffed{ color:#e8894b; font-style:italic; }
+  .log .witness{ color:#d9a94b; font-style:italic; }
+  .log .phase{ color:#c0b8e6; font-weight:600; letter-spacing:.02em; } .log .sleep{ color:#6f78a8; font-style:italic; } .log .wake{ color:#8fb0e0; }
+  .log .word-coin{ color:#7fd6c0; } .log .word-catch{ color:#63d29b; } .log .word-adopted{ color:var(--ok); font-weight:600; } .log .word-flop{ color:#9a86d6; font-style:italic; } .log .chat{ color:#a9c8f0; }
+  .booth{ border:1px solid var(--gold); background:#1a160c; border-radius:9px; padding:10px; display:none; }
+  .booth.show{ display:block; } .booth .who{ color:var(--gold); font-weight:700; }
+  .booth .convo{ max-height:190px; overflow:auto; display:flex; flex-direction:column; gap:5px; margin:8px 0; }
+  .booth .msg{ padding:5px 9px; border-radius:9px; font-size:12px; max-width:88%; line-height:1.35; }
+  .booth .msg.bot{ background:#2a2210; align-self:flex-start; } .booth .msg.me{ background:#12233a; align-self:flex-end; color:#bcd4f5; }
+  .booth .msg.typing::after{ content:"▍"; margin-left:1px; opacity:.7; animation:blink 1s steps(2,start) infinite; } @keyframes blink{ 50%{ opacity:0; } }
+  .booth .row{ display:flex; gap:6px; } .booth input{ flex:1; } .booth .rep{ background:#1c3a24; color:var(--ok); border-color:var(--ok); } .booth .rej{ background:#3a1c1c; color:var(--err); border-color:var(--err); }
+  .conn{ font-size:12px; } .conn-ok{ color:var(--ok); } .conn-bad{ color:var(--err); } .conn-wait{ color:var(--dim); }
+  .think-dot{ display:none; color:var(--dim); font-weight:400; font-size:11px; } .think-dot.on{ display:inline; }
+  textarea{ width:100%; background:#1b1f2b; color:var(--ink); border:1px solid var(--line); border-radius:7px; padding:6px 8px; font:inherit; font-size:12px; resize:vertical; }
+  .tune{ display:flex; flex-direction:column; gap:5px; margin-top:9px; }
+  .tune label{ display:flex; align-items:center; gap:8px; font-size:12px; color:var(--dim); }
+  .tune input[type=range]{ flex:1; accent-color:var(--info); } .tune output{ color:var(--ink); min-width:34px; text-align:right; font-variant-numeric:tabular-nums; }
+  .tune select{ padding:3px 6px; }
+  .charts{ display:flex; flex-direction:column; gap:5px; } .chart{ display:flex; flex-direction:column; gap:1px; }
+  .chart .lbl{ font-size:11px; color:var(--dim); } .chart .lbl b{ color:var(--ink); float:right; }
+  .chart svg{ width:100%; height:22px; background:#0e1016; border-radius:4px; } .chart svg polyline{ fill:none; stroke:var(--info); stroke-width:1.3; vector-effect:non-scaling-stroke; }
+  #chTribes polyline{ stroke:var(--accent); } #chCon polyline{ stroke:var(--ok); }
+  .rumors{ margin-top:8px; display:flex; flex-direction:column; gap:5px; } .rumors .r{ font-size:11px; color:var(--dim); }
+  .rumors .r .t{ color:var(--ink); } .rumors .rbar{ height:5px; background:#1b1f2b; border-radius:3px; overflow:hidden; margin-top:2px; display:flex; }
+  .rumors .rbar>i{ height:100%; background:var(--warn); } .rumors .rbar>u{ height:100%; background:#2f4a63; }
+  .badge{ font-size:9px; padding:1px 5px; border-radius:8px; vertical-align:middle; margin-left:4px; }
+  .badge.official{ background:#1c3a2a; color:#63d29b; } .badge.proposed{ background:#2a2f3d; color:#8fa0c0; } .badge.obsolete{ background:#3a2230; color:#c07a90; }
+  .dictModal{ display:none; position:fixed; inset:0; background:rgba(4,6,10,.72); z-index:50; align-items:center; justify-content:center; }
+  .dictModal.show{ display:flex; }
+  .dictBox{ background:var(--card,#12151d); border:1px solid #2a2f3d; border-radius:12px; padding:16px 18px; width:min(560px,92vw); max-height:82vh; overflow:auto; box-shadow:0 12px 48px rgba(0,0,0,.5); }
+  .dictBody .de{ padding:7px 0; border-bottom:1px solid #1b1f2b; } .dictBody .de:last-child{ border:0; }
+  .dictBody .de .w{ color:var(--gold,#e8c06a); font-weight:700; font-size:14px; } .dictBody .de .m{ color:var(--ink,#dfe6f2); font-size:12px; }
+  .dictBody .de .meta{ color:var(--dim,#8a94a8); font-size:10.5px; margin-top:2px; }
+  .metrics{ display:flex; gap:10px; flex-wrap:wrap; font-size:12px; } .metrics b{ font-size:15px; }
+  .bar{ height:8px; background:#1b1f2b; border-radius:4px; overflow:hidden; margin-top:4px; } .bar>i{ display:block; height:100%; background:var(--warn); }
+  text{ font-family:ui-sans-serif,system-ui; }
+  /* --- the DISORDERS LAB: a right-docked panel so the town MAP (the at-scale view) stays visible on the left --- */
+  #labPanel{ display:none; position:fixed; top:0; right:0; width:min(420px,96vw); height:100vh; z-index:60; background:linear-gradient(180deg,#12151d,#0d1017); border-left:1px solid #2a3346; box-shadow:-14px 0 44px rgba(0,0,0,.55); overflow-y:auto; padding:14px 16px; }
+  #labPanel.show{ display:block; }
+  #labPanel h3{ margin:0; } #labPanel .labClose{ float:right; padding:2px 9px; }
+  #labPanel .disc{ font-size:10.5px; color:var(--dim); background:#1a1410; border:1px solid #3a2f1c; border-radius:7px; padding:6px 8px; margin:8px 0; }
+  #labPanel .grp{ border:1px solid var(--line); border-radius:9px; padding:9px; margin-bottom:10px; }
+  #labPanel .grp h4{ margin:0 0 7px; font-size:10px; color:var(--dim); text-transform:uppercase; letter-spacing:.5px; }
+  #labPanel .presets{ display:flex; gap:5px; flex-wrap:wrap; margin-bottom:8px; }
+  #labPanel .presets button{ font-size:11px; padding:5px 7px; }
+  #labPanel .row{ display:flex; align-items:center; gap:7px; margin:5px 0; font-size:12px; color:var(--dim); } #labPanel .row output{ color:var(--ink); min-width:38px; text-align:right; font-variant-numeric:tabular-nums; }
+  #labPanel .row input[type=range]{ flex:1; accent-color:#e2607a; } #labPanel select{ padding:4px 6px; }
+  #labPanel .act{ display:flex; gap:6px; margin-top:8px; } #labPanel .act button{ flex:1; } #btnInduce{ background:#3a1c22; color:#e2607a; border-color:#e2607a; } #btnHeal{ background:#12331f; color:var(--ok); border-color:var(--ok); }
+  #labProg{ font:11px ui-monospace,monospace; color:#8fb4ff; margin-top:8px; white-space:pre; min-height:15px; }
+  .spark{ margin:6px 0; } .spark .lab{ display:flex; justify-content:space-between; font-size:11px; color:var(--dim); } .spark .lab b{ color:var(--ink); font-variant-numeric:tabular-nums; }
+  .spark svg{ width:100%; height:34px; background:#0e1016; border-radius:5px; display:block; } .spark svg .set{ stroke:#4a5268; stroke-width:1; stroke-dasharray:3 3; vector-effect:non-scaling-stroke; } .spark svg polyline{ fill:none; stroke-width:1.6; vector-effect:non-scaling-stroke; }
+  #labScale .m{ display:flex; justify-content:space-between; font-size:12px; padding:3px 0; border-bottom:1px solid #1b1f2b; } #labScale .m b{ font-variant-numeric:tabular-nums; } #labScale .m .d{ font-size:11px; }
+  #labReport{ font-size:12px; color:var(--ink); line-height:1.5; } #labReport .rk{ color:var(--dim); }
+  #labPanel .chrow{ display:flex; align-items:center; gap:7px; margin:4px 0; font-size:12px; }
+  #labPanel .chrow label{ display:flex; align-items:center; gap:4px; width:108px; color:var(--dim); cursor:pointer; user-select:none; } #labPanel .chrow label.armed{ color:var(--ink); font-weight:600; }
+  #labPanel .chrow input[type=range]{ flex:1; accent-color:#e2607a; opacity:.45; } #labPanel .chrow.on input[type=range]{ opacity:1; } #labPanel .chrow output{ width:32px; text-align:right; font-variant-numeric:tabular-nums; color:var(--ink); }
+  #labPanel .chrow .hn{ font-size:9px; color:#5a627a; width:52px; }
+  #labHist .h{ padding:4px 2px; border-bottom:1px solid #1b1f2b; font-size:11px; color:var(--dim); } #labHist .h b{ color:var(--ink); } #labHist .h .dl{ color:var(--err); } #labHist .h .up{ color:var(--ok); }
+  /* the ECONOMY-AT-SCALE data-flow view — overlays the street; shows 1,500 agents as FLOW, not sprites */
+  #flowView{ position:absolute; inset:0; background:radial-gradient(120% 90% at 50% 22%, #131a2b 0%, #0b0d12 78%); display:none; }
+  #flowView.show{ display:block; } #flowView svg{ width:100%; height:100%; }
+  #flowView .fnode{ fill:#161b28; stroke:#2c3346; stroke-width:0.5; }
+  #flowView .fhub{ fill:#1c1808; stroke:var(--gold); stroke-width:0.7; }
+  #flowView .ftitle{ fill:var(--dim); font-size:3px; text-transform:uppercase; letter-spacing:.3px; }
+  #flowView .fbig{ font-size:8px; font-weight:700; font-variant-numeric:tabular-nums; }
+  #flowView .fsub{ fill:var(--dim); font-size:2.6px; }
+  #flowView .stream{ fill:none; stroke-linecap:round; stroke-dasharray:2 3.2; animation:flowMarch 0.9s linear infinite; }
+  #flowView .stream.rent{ animation-direction:reverse; }
+  @keyframes flowMarch{ to{ stroke-dashoffset:-5.2; } }
+  #flowView .cycle{ fill:none; stroke:#39415a; stroke-width:0.35; stroke-dasharray:1 1.6; opacity:.6; }
+  #flowView .hbar{ stroke:none; } #flowView .axis{ stroke:#2a3040; stroke-width:0.3; }
+  #flowView .chip{ fill:var(--ink); font-size:3px; font-variant-numeric:tabular-nums; } #flowView .chip tspan{ fill:var(--dim); }
+</style></head>
+<body>
+<header>
+  <b>🌸 HARMONY HOLLOW</b><span class="m">a town that can't agree</span>
+  <span class="m">tribes <span id="mTribes">–</span></span>
+  <span class="m">polarization <span id="mPol">–</span></span>
+  <span class="m">consensus <span id="mCon">–</span></span>
+  <span class="m" id="mClock" title="time of day — chronotypes decide who's awake">–</span>
+  <span class="m" id="mTraffic" title="traffic lights — bots wait for the walk signal"></span>
+  <span class="m" id="mEcon" title="the town treasury — money is conserved (wallets + treasury = a constant supply)"></span>
+  <span class="m" id="mScale" title="the economy at SCALE — 1,500 abstract agents running as pure data behind the 16 you can watch"></span>
+  <span class="m" style="margin-left:auto"><span id="ollamaStatus" class="conn conn-wait">● checking Ollama…</span></span>
+  <span class="m">topic: <span id="mTopic">–</span></span>
+</header>
+<main>
+  <div class="card map"><svg id="map" viewBox="-11 -7 22 14" preserveAspectRatio="xMidYMid meet">
+    <defs>
+      <radialGradient id="lampGlow" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="#ffe0a0" stop-opacity=".5"/><stop offset="70%" stop-color="#ffcf7a" stop-opacity=".08"/><stop offset="100%" stop-color="#ffcf7a" stop-opacity="0"/></radialGradient>
+      <linearGradient id="roadG" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#2b2f39"/><stop offset="50%" stop-color="#23262f"/><stop offset="100%" stop-color="#2b2f39"/></linearGradient>
+    </defs>
+    <g id="ground"></g><g id="road"></g><g id="buildings"></g><g id="labels"></g>
+    <rect id="nightVeil" x="-12" y="-7" width="24" height="14" fill="#0a1226" opacity="0" pointer-events="none"/>
+    <g id="lights"></g><g id="bots"></g>
+  </svg>
+    <div id="flowView"><svg id="flow" viewBox="0 0 200 130" preserveAspectRatio="xMidYMid meet"></svg></div>
+  </div>
+  <div class="side">
+    <div class="card" style="flex:0 0 auto"><h3>controls</h3><div class="ctl">
+      <button id="btnRun">▶ run</button>
+      <select id="mouth"><option value="ollama">voices: ollama</option><option value="none">voices: off (deterministic)</option></select>
+      <input id="model" value="gemma4:latest" style="width:96px" title="ollama model"/>
+      <label style="font-size:11px;color:var(--dim)" title="stream tokens + early-stop (types the reply out, frees the mouth slot sooner)"><input type="checkbox" id="streamChk" checked style="vertical-align:middle"/> stream</label>
+      <button id="btnMega" title="charge status">📣 megaphone</button>
+      <button id="btnDict" title="the town dictionary">📖 dictionary</button>
+      <button id="btnDayNight" title="toggle the day/night cycle — off = everyone always awake">🌗 day/night: on</button>
+      <button id="btnScale" title="switch the map to the ECONOMY AT SCALE — the 1,500-agent market as flowing data, not sprites">📊 scale view</button>
+      <button id="btnLab" title="the Disorders Lab — lesion a neuromodulator channel and watch the failure cascade in one bot and across the town">🧪 disorders lab</button>
+    </div>
+    <div class="tune">
+      <label>sim speed <output id="oSpeed">3×</output><input id="sSpeed" type="range" min="1" max="20" step="1" value="3"/></label>
+    </div></div>
+    <div class="card" style="flex:0 0 auto"><h3>the wishing well <span style="color:var(--dim);text-transform:none">— you are the visitor</span></h3>
+      <div id="boothPanel" class="booth">
+        <div class="who"><span id="boothWho"></span> is at the well <span id="boothThink" class="think-dot"></span></div>
+        <div class="convo" id="boothConvo"></div>
+        <div class="row"><input id="boothText" placeholder="say something to them…"/><button class="rep" id="boothSay">say</button><button class="rej" id="boothRelease">send off →</button></div>
+      </div>
+      <div id="boothIdle" style="color:var(--dim);font-size:12px">No one at the well. Curious townsfolk will wander over — talk with them as long as you like, then send them off to spread the word.</div>
+    </div>
+    <div class="card" style="flex:0 0 auto"><h3>add a townsperson</h3>
+      <div class="ctl" style="gap:6px"><input id="newName" placeholder="name" style="width:96px"/>
+        <select id="newZone"></select></div>
+      <textarea id="newPersona" rows="3" placeholder="Describe their personality in a line or two — e.g. 'a huge, quiet, immovably calm worker of very few words.'"></textarea>
+      <div class="ctl" style="margin-top:6px"><label style="color:var(--dim);font-size:11px">leans <input id="newStance" type="range" min="-1" max="1" step="0.1" value="0" style="vertical-align:middle"/></label><button id="btnAdd">＋ add to town</button></div>
+    </div>
+    <div class="card" style="flex:0 0 auto"><h3>dynamics <button id="btnExport" style="float:right;padding:2px 7px;font-size:11px">⬇ export</button></h3>
+      <div id="civ" style="font-size:11px;color:var(--dim);margin-bottom:6px" title="the observatory — longitudinal civilization metrics">🔭 observatory —</div>
+      <div class="charts">
+        <div class="chart"><span class="lbl">polarization <b id="cPol">–</b></span><svg id="chPol" viewBox="0 0 100 22" preserveAspectRatio="none"><polyline/></svg></div>
+        <div class="chart"><span class="lbl">tribes <b id="cTribes">–</b></span><svg id="chTribes" viewBox="0 0 100 22" preserveAspectRatio="none"><polyline/></svg></div>
+        <div class="chart"><span class="lbl">consensus <b id="cCon">–</b></span><svg id="chCon" viewBox="0 0 100 22" preserveAspectRatio="none"><polyline/></svg></div>
+      </div>
+      <div class="rumors" id="rumors"><div style="color:var(--dim);font-size:11px">rumours spreading (reach · fidelity) appear here</div></div>
+      <h3 style="margin-top:12px">town lexicon</h3>
+      <div class="chatrow"><input id="coinWord" placeholder="a new word" style="width:88px"/><input id="coinMean" placeholder="what it means (English)"/><button id="coinBtn">coin</button></div>
+      <div class="rumors" id="lexicon"><div style="color:var(--dim);font-size:11px">coined words + their meaning + how far they've spread appear here</div></div>
+    </div>
+    <div class="card" style="flex:1 1 auto; display:flex; flex-direction:column; min-height:150px"><h3>the colony talks</h3>
+      <div class="log" id="log"></div>
+    </div>
+  </div>
+</main>
+<div id="dictModal" class="dictModal"><div class="dictBox">
+  <h3>📖 The Town Dictionary <span id="dictKeeper" style="color:var(--dim);font-weight:400;font-size:12px"></span> <button id="dictClose" style="float:right;padding:2px 9px">✕</button></h3>
+  <div id="dictBody" class="dictBody"></div>
+  <h3 style="margin-top:14px">📜 The Town's Story <span style="color:var(--dim);font-weight:400;font-size:12px">— the lore a newcomer inherits</span></h3>
+  <div id="chronBody" class="dictBody"></div>
+</div></div>
+<div id="labPanel">
+  <button class="labClose" id="labClose">✕</button><h3 style="color:var(--gold)">🧪 Disorders Lab</h3>
+  <div class="disc">A MODEL, not a diagnosis. This lesions a neuromodulator channel on the real brain module and shows how the loss <b>cascades</b> — chem → mood → behaviour → society. It's for intuition, not clinical claims.</div>
+  <div class="grp"><h4>the lesion — arm any channels, set each setpoint</h4>
+    <div class="presets">
+      <button data-preset="dopa">🧊 Dopamine↓</button>
+      <button data-preset="sero">🌧 Serotonin↓</button>
+      <button data-preset="ne">⚡ NE↑</button>
+      <button data-preset="ach">👁 ACh↑</button>
+      <button data-preset="comorbid">🌧⚡ Depr+Anx</button>
+      <button data-preset="reset">↩ reset</button>
+    </div>
+    <div class="chrow" data-ch="dopamine"><label><input type="checkbox" class="arm"/> dopamine</label><input type="range" class="tgt" min="0" max="1" step="0.01" value="0.2"/><output>0.20</output><span class="hn">·0.20</span></div>
+    <div class="chrow" data-ch="serotonin"><label><input type="checkbox" class="arm"/> serotonin</label><input type="range" class="tgt" min="0" max="1" step="0.01" value="0.5"/><output>0.50</output><span class="hn">·0.50</span></div>
+    <div class="chrow" data-ch="norepinephrine"><label><input type="checkbox" class="arm"/> norepineph.</label><input type="range" class="tgt" min="0" max="1" step="0.01" value="0.3"/><output>0.30</output><span class="hn">·0.30</span></div>
+    <div class="chrow" data-ch="acetylcholine"><label><input type="checkbox" class="arm"/> acetylchol.</label><input type="range" class="tgt" min="0" max="1" step="0.01" value="0.3"/><output>0.30</output><span class="hn">·0.30</span></div>
+    <div class="row" style="margin-top:6px">scope <select id="labScope"><option value="town">whole town</option><option value="bot">this bot only</option></select> · duration <select id="labDur"><option value="1500">short</option><option value="4000" selected>medium</option><option value="9000">long</option><option value="20000">very long</option></select></div>
+    <div class="row"><label style="color:var(--dim);cursor:pointer"><input id="labAutoHeal" type="checkbox"/> heal to healthy before each run <span style="opacity:.6">(independent trials, not a walk)</span></label></div>
+    <div class="act"><button id="btnInduce">▶ induce</button><button id="btnHeal">↺ heal all</button></div>
+    <div id="labProg"></div>
+  </div>
+  <div class="grp"><h4>the individual <select id="labBot" style="float:right;font-size:11px;padding:2px 5px"></select></h4>
+    <div class="spark" id="spkD"><div class="lab"><span>dopamine</span><b>–</b></div><svg viewBox="0 0 120 34" preserveAspectRatio="none"><line class="set" x1="0" x2="120"/><polyline stroke="#63d29b"/></svg></div>
+    <div class="spark" id="spkS"><div class="lab"><span>serotonin</span><b>–</b></div><svg viewBox="0 0 120 34" preserveAspectRatio="none"><line class="set" x1="0" x2="120"/><polyline stroke="#e5c46b"/></svg></div>
+    <div class="spark" id="spkN"><div class="lab"><span>norepinephrine</span><b>–</b></div><svg viewBox="0 0 120 34" preserveAspectRatio="none"><line class="set" x1="0" x2="120"/><polyline stroke="#6ea8ff"/></svg></div>
+    <div class="spark" id="spkA"><div class="lab"><span>acetylcholine</span><b>–</b></div><svg viewBox="0 0 120 34" preserveAspectRatio="none"><line class="set" x1="0" x2="120"/><polyline stroke="#c98bff"/></svg></div>
+    <div class="spark" id="spkV"><div class="lab"><span>mood valence</span><b>–</b></div><svg viewBox="0 0 120 34" preserveAspectRatio="none"><line class="set" x1="0" x2="120" y1="17" y2="17"/><polyline stroke="#e2607a"/></svg></div>
+    <div class="spark" id="spkAr"><div class="lab"><span>arousal</span><b>–</b></div><svg viewBox="0 0 120 34" preserveAspectRatio="none"><polyline stroke="#e8b04b"/></svg></div>
+    <div class="row" style="margin-top:4px">doing: <b id="labDoing" style="color:var(--ink)">–</b></div>
+  </div>
+  <div class="grp"><h4>at scale — the whole town</h4><div id="labScale"></div></div>
+  <div class="grp"><h4>the town over time — watch the LAG</h4>
+    <div class="spark" id="spkTM"><div class="lab"><span>avg mood</span><b>–</b></div><svg viewBox="0 0 120 34" preserveAspectRatio="none"><line class="set" x1="0" x2="120" y1="17" y2="17"/><polyline stroke="#e2607a"/></svg></div>
+    <div class="spark" id="spkTP"><div class="lab"><span>avg job productivity</span><b>–</b></div><svg viewBox="0 0 120 34" preserveAspectRatio="none"><line class="set" x1="0" x2="120"/><polyline stroke="#63d29b"/></svg></div>
+    <div class="spark" id="spkTW"><div class="lab"><span>avg wealth (the downstream)</span><b>–</b></div><svg viewBox="0 0 120 34" preserveAspectRatio="none"><polyline stroke="#e5c46b"/></svg></div>
+  </div>
+  <div class="grp" id="labReportWrap" style="display:none"><h4>report <button id="labCopy" style="float:right;font-size:10px;padding:2px 6px">copy</button></h4><div id="labReport"></div></div>
+  <div class="grp"><h4>experiment history <button id="labClearHist" style="float:right;font-size:10px;padding:2px 6px">clear</button></h4><div id="labHist" style="max-height:170px;overflow-y:auto"><div style="color:var(--dim);font-size:11px">each run is logged here — build a dataset without copy-pasting</div></div></div>
+</div>
+<script type="module">
+  import { makeColonyApp } from "./src/agents/colonyApp.js";
+  import { makeMarket } from "./src/agents/market.js";
+  import { makeProgress } from "./src/agents/progress.js";
+  import { makeMouth } from "./src/agents/mouth.js";
+  import { makeScheduler } from "./src/agents/scheduler.js";
+  import { pumpStream } from "./src/agents/textStream.js";
+  import { makeIndexedDbStorage } from "../../brain/src/storage.js";
+  const $ = (id)=>document.getElementById(id);
+  const SVGNS="http://www.w3.org/2000/svg";
+  const TRIBE_COLORS=["#6ea8ff","#e2607a","#63d29b","#e8b04b","#9a86d6","#4ec6c9","#d98c5f"];
+
+  // --- WORLD: HARMONY HOLLOW as a 4-WAY INTERSECTION. A horizontal road (E-W) and a vertical road (N-S) cross at
+  //     the centre; shops line the north, homes the south, split into west/east blocks by the vertical road. Buildings
+  //     have WALLS (collision) with a DOOR the planner routes through; bots walk the sidewalks and cross the roads ONLY
+  //     at the FOUR crosswalks (one per arm). Cast lampshade a pastel friendship-cartoon IN SPIRIT.
+  const WT=0.24;                                    // wall thickness
+  function building(name,x,y,w,h,doorSide,extra={}){
+    const walls=[ {x,y:y+h/2,w,h:WT}, {x,y:y-h/2,w,h:WT}, {x:x-w/2,y,w:WT,h}, {x:x+w/2,y,w:WT,h} ]; // N,S,W,E
+    const dW=Math.min(1.05,w*0.44), dy=doorSide==='north'?y+h/2:y-h/2;
+    return { zone:{name,x,y,w,h,doorSide,...extra}, walls, openings:[{x,y:dy,w:dW,h:WT*3}], door:{x,y:dy,side:doorSide,w:dW} };
+  }
+  function buildIntersection(){
+    const zones=[], walls=[], openings=[], shops=[], homes=[], doors=[];
+    const add=(b,into)=>{ zones.push(b.zone); walls.push(...b.walls); openings.push(...b.openings); doors.push(b.door); if(into)into.push(b.zone); return b; };
+    const SY=4.9, SW=2.8, SH=2.0;                   // SHOPS (north, doors south), a west pair + an east pair
+    [['library',-7.6,'books & planning'],['bakery',-4.1,'sweets & parties'],['boutique',4.1,'style & flair'],['orchard',7.6,'the grocer']]
+      .forEach(([n,x,p])=>add(building(n,x,SY,SW,SH,'south',{purpose:p}),shops));
+    const HY=-4.85, HW=3.0, HH=2.7;                 // HOMES (south, doors north) — roomy enough that a full ~6-bot cohort's slot-ring fits (no jitter)
+    [['the lofts',-7.6,'apartments'],['the cottages',-4.1,'apartments'],['the burrows',4.1,'apartments']]
+      .forEach(([n,x,p])=>add(building(n,x,HY,HW,HH,'north',{home:true,purpose:p}),homes));
+    add(building('the bank',7.6,-4.7,2.8,2.0,'north',{charger:true,bank:true,purpose:'cash · check-in'})); // the BANK, a building — SE (moved off the SW corner so it stops crowding the lofts)
+    // ROADS — the 4-way. Horizontal at y=1, vertical at x=0.
+    const road={ y:1.0, h:1.6, vx:0, vw:1.9, cx:0, cy:1.0 };
+    walls.push({ x:0, y:road.y, w:26, h:road.h });   // horizontal road
+    walls.push({ x:road.vx, y:0, w:road.vw, h:24 }); // vertical road
+    walls.push({x:0,y:6.7,w:24,h:WT},{x:0,y:-6.7,w:24,h:WT},{x:-10.9,y:0,w:WT,h:14},{x:10.9,y:0,w:WT,h:14}); // box the map
+    // FOUR CROSSWALKS — one per arm, set back from the centre box.
+    const cwW=1.5, back=2.75;
+    const crossings=[
+      { id:'W', axis:'H', x:-back, y:road.y, w:cwW, h:road.h+0.5 }, // cross the horizontal road, west of centre
+      { id:'E', axis:'H', x: back, y:road.y, w:cwW, h:road.h+0.5 },
+      { id:'N', axis:'V', x:road.vx, y:road.y+back, w:road.vw+0.5, h:cwW }, // cross the vertical road, north of centre
+      { id:'S', axis:'V', x:road.vx, y:road.y-back, w:road.vw+0.5, h:cwW },
+    ];
+    for(const c of crossings) openings.push({ x:c.x, y:c.y, w:c.w, h:c.h });
+    zones.push({ name:'the well', x:-7.6, y:-2.2, radius:1.05, booth:true, purpose:'consult the visitor' }); // the WELL (user embassy) — SW, a small stage-like structure (rendered soapbox-style in drawWorld)
+    zones.push({ name:'the soapbox', x:2.7, y:-2.4, radius:0.7, megaphone:true, purpose:'address the town' }); // SE plaza
+    return { zones, walls, openings, shops, homes, doors, road, crossings, bounds:{ minX:-10.5, maxX:10.5, minY:-6.4, maxY:6.4 }, sidewalk:{ north:{y:2.95}, south:{y:-0.9} } };
+  }
+  const world = buildIntersection();
+  const scenario = {
+    topic:"the Summer Festival",
+    statics:[],
+    zones: world.zones, walls: world.walls, openings: world.openings, bounds: world.bounds,
+    crossings: world.crossings, roads: { h:{y:world.road.y,h:world.road.h}, v:{x:world.road.vx,w:world.road.vw} },
+    // The full cast: a "mane six" + sidekick + night-soul + a CMC-trio of kids + two elders, a guard-captain,
+    // and a lovable bumbler + a second night-owl — analogs in SPIRIT only. chronotype (lark/default/owl) sets
+    // WHEN each is awake, so the town of 16 is never all on-stage at once (see clock.js).
+    bots:[
+      { name:"Chloe",    startZone:"library",  pose:{x:-2.6,y:2.4},  curiosity:0.5,  dominance:0.6,  chronotype:"default", lexicographer:true, persona:"a bookish, over-organized planner who leads by making lists and frets over getting every detail perfect." },
+      { name:"Gale",     startZone:"bakery",   pose:{x:2.6,y:2.4},   curiosity:0.7,  dominance:0.85, chronotype:"lark",    persona:"a brash, loyal speedster who craves excitement, boasts constantly, and never backs down from a dare." },
+      { name:"Sprinkles",startZone:"bakery",   pose:{x:2.6,y:0.4},   curiosity:0.9,  dominance:0.55, chronotype:"owl",     persona:"an irrepressible bundle of joy who lives to throw parties and blurts out whatever pops into her head." },
+      { name:"Bushel",   startZone:"orchard",  pose:{x:-2.6,y:-1.8}, curiosity:0.2,  dominance:0.6,  chronotype:"lark",    persona:"a plain-spoken, hard-working orchard-keeper; honest to a fault and stubborn about the old ways." },
+      { name:"Velvet",   startZone:"boutique", pose:{x:2.6,y:-1.8},  curiosity:0.45, dominance:0.65, chronotype:"owl",     persona:"a glamorous, dramatic dressmaker — generous of heart but given to grand theatrical sighs." },
+      { name:"Sage",     startZone:"orchard",  pose:{x:-2.6,y:-3.0}, curiosity:0.35, dominance:0.1,  chronotype:"lark",    persona:"a painfully shy, gentle soul who dotes on small creatures and shrinks from any conflict." },
+      { name:"Spark",    startZone:"library",  pose:{x:-2.6,y:0.4},  curiosity:0.6,  dominance:0.35, chronotype:"owl",     persona:"a young, sardonic helper who grumbles endlessly but is fiercely devoted to his friends." },
+      { name:"Vesper",   startZone:"boutique", pose:{x:2.6,y:-3.0},  curiosity:0.75, dominance:0.5,  chronotype:"owl",     persona:"a brooding night-owl, once misunderstood; formal and dramatic, quietly longing to belong." },
+      { name:"Scout",    startZone:"orchard",  pose:{x:0,y:-2.8},    curiosity:0.85, dominance:0.4,  chronotype:"default", persona:"a restless kid desperate to find her special talent and prove she belongs with the grown-ups." },
+      { name:"Pip",      startZone:"bakery",   pose:{x:3.2,y:0.0},   curiosity:0.85, dominance:0.3,  chronotype:"default", persona:"an eager, tinkering kid who builds rattling contraptions and idolizes the older crowd." },
+      { name:"Dot",      startZone:"library",  pose:{x:-3.2,y:0.0},  curiosity:0.7,  dominance:0.35, chronotype:"default", persona:"a bookish, list-making kid, Scout's steady friend — quietly braver than she looks." },
+      { name:"Solara",   startZone:"library",  pose:{x:-3.4,y:2.0},  curiosity:0.4,  dominance:0.8,  chronotype:"lark",    persona:"a radiant elder of warm authority who presides over the day and speaks in calm, sunny counsel." },
+      { name:"Amara",    startZone:"boutique", pose:{x:3.4,y:-2.6},  curiosity:0.5,  dominance:0.7,  chronotype:"default", persona:"a gentle, love-minded elder who mends quarrels and quietly blesses every budding friendship." },
+      { name:"Armor",    startZone:"orchard",  pose:{x:-3.4,y:-2.4}, curiosity:0.4,  dominance:0.8,  chronotype:"lark",    persona:"an earnest, protective guard-captain devoted to Amara; steady, dutiful, and a touch over-serious." },
+      { name:"Bubbles",  startZone:"bakery",   pose:{x:3.4,y:2.0},   curiosity:0.6,  dominance:0.3,  chronotype:"lark",    persona:"a sweet, well-meaning bumbler who muddles every message and trips over her own hooves — beloved anyway." },
+      { name:"Nocturne", startZone:"boutique", pose:{x:3.2,y:-3.4},  curiosity:0.55, dominance:0.45, chronotype:"owl",     persona:"a soft-spoken night-baker and stargazer, kindred to Vesper, happiest working under the moon." },
+    ],
+    openness:{ Chloe:0.4, Gale:0.6, Sprinkles:0.7, Bushel:0.25, Velvet:0.5, Sage:0.45, Spark:0.55, Vesper:0.5, Scout:0.7, Pip:0.65, Dot:0.5, Solara:0.35, Amara:0.6, Armor:0.4, Bubbles:0.7, Nocturne:0.5 },
+    seeds:[ { bot:"Gale", stance:0.9, text:"let's make this festival bigger and wilder than ever" }, { bot:"Bushel", stance:-0.9, text:"the festival's always been done the same way, and that's how it stays" } ],
+  };
+  // spawn everyone on a sidewalk (the old poses were for the round map) — they path to their startZone from there.
+  // Give them a brisk pedestrian pace so a street-scale journey completes before the social layer re-targets them.
+  scenario.bots.forEach((b,i)=>{ const n=scenario.bots.length, half=Math.ceil(n/2); const x = i<half ? -9 + i*(6.8/(half-1)) : 2.2 + (i-half)*(6.8/(n-half-1||1)); b.pose={ x, y:(i%2===0? world.sidewalk.north.y : world.sidewalk.south.y) }; b.speed=1.05; }); // spawn on the sidewalks in the left/right blocks (avoid the vertical road at x=0)
+  // JOBS — a few themed roles that pay a wage at their workplace; everyone else earns social-labour by being out & chatting.
+  scenario.jobs = {
+    Chloe:{title:'the Librarian', at:'library'}, Bushel:{title:'the Grocer', at:'orchard'}, Velvet:{title:'the Dressmaker', at:'boutique'},
+    Sprinkles:{title:'the Baker', at:'bakery'}, Amara:{title:'the Banker', at:'the bank'}, Armor:{title:'the Watch', at:null}, Solara:{title:'the Mayor', at:'the well'},
+  };
+
+  // --- mouth (voices) : ollama by default, routed through the scheduler so bots QUEUE for the model.
+  // NOTE the real clock — without it the scheduler's rate-limit jams after the first call and nobody speaks. ---
+  const scheduler = makeScheduler({ concurrency:1, minIntervalMs:600, now:()=>performance.now() });
+  function ollamaBackend(model){ return { name:"ollama", async generate({system,messages,options}){
+    // think:false — gemma4 & friends are "thinking" models; without this they route the whole reply into a
+    // `thinking` field and leave `content` EMPTY for anything but the simplest prompts (that's why the
+    // megaphone fell back). Belt-and-braces: fall back to `thinking` if content is still empty.
+    const body={ model, stream:false, think:false, messages:[...(system?[{role:"system",content:system}]:[]),...(messages||[])], options:{ num_predict:64, temperature:0.85 } };
+    const r=await fetch("http://localhost:11434/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    if(!r.ok) throw new Error("ollama "+r.status); const d=await r.json(); const m=d.message||{}; return String(m.content||m.thinking||"").replace(/\s+/g," ").trim(); }}; }
+  // STREAMING backend — Ollama with stream:true (NDJSON). Types the line out via onChunk and EARLY-STOPS at a
+  // natural sentence boundary so the single mouth slot frees sooner (raises the utterances/min ceiling). Same
+  // { generate } shape → drop-in swappable with the non-streaming one and (later) a Perchance mouth.
+  function ollamaStreamBackend(model){ return { name:"ollama-stream", async generate({system,messages,options,onChunk,signal}){
+    const body={ model, stream:true, think:false, messages:[...(system?[{role:"system",content:system}]:[]),...(messages||[])], options:{ num_predict:(options&&options.num_predict)||64, temperature:(options&&options.temperature)??0.85 } };
+    const r=await fetch("http://localhost:11434/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body),signal});
+    if(!r.ok||!r.body) throw new Error("ollama "+r.status);
+    const reader=r.body.getReader(), dec=new TextDecoder();
+    const read=async()=>{ const {done,value}=await reader.read(); return done?null:dec.decode(value,{stream:true}); };
+    try { return await pumpStream({ read, onChunk, earlyStop:{ minChars:56, maxSentences:2 } }); }
+    finally { try{ reader.cancel(); }catch(e){} } }}; }
+  let mouth = null;
+  function buildMouth(){ const stream=$("streamChk")&&$("streamChk").checked; mouth = $("mouth").value==="ollama" ? makeMouth({ backend: (stream?ollamaStreamBackend:ollamaBackend)($("model").value.trim()||"gemma4:latest"), scheduler }) : null; return mouth; }
+  buildMouth(); // build the (ollama) mouth up front so the initial app has a voice
+  // --- Ollama connection status (header dot) ---
+  function setConn(state, text){ const el=$("ollamaStatus"); if(el){ el.className="conn conn-"+state; el.textContent="● "+text; } }
+  async function pingOllama(){ if($("mouth").value!=="ollama"){ setConn("wait","voices off"); return; } try{ const r=await fetch("http://localhost:11434/api/tags"); if(!r.ok) throw 0; const d=await r.json(); setConn("ok",`Ollama connected · ${d.models?d.models.length:0} models`); }catch(e){ setConn("bad","Ollama offline (needs OLLAMA_ORIGINS=*)"); } }
+  pingOllama(); setInterval(pingOllama, 12000);
+
+  // --- the wishing well: a multi-turn chat YOU (the visitor) control. onUser is called on each of your turns
+  //     with the running transcript; resolve {action:"say",text} to keep talking or {action:"release"} to send
+  //     them off. The panel stays up (with a "…thinking" note) while the bot composes its reply. ---
+  let boothResolve=null, boothActive=false, boothBusy=false;
+  function renderConvo(convo){ const el=$("boothConvo"); el.innerHTML=""; for(const m of convo){ const d=document.createElement("div"); d.className="msg "+(m.who==="user"?"me":"bot"); d.textContent=(m.who==="user"?"you: ":"")+m.text; el.appendChild(d); } el.scrollTop=el.scrollHeight; }
+  // live TYPING bubble — a streaming booth reply fills a temporary bot bubble token-by-token; renderConvo() (next
+  // user turn) clears it and replaces it with the finished line.
+  function boothTyping(name, text){ if(!boothActive) return; const el=$("boothConvo"); let d=el.querySelector(".msg.bot.typing"); if(!d){ d=document.createElement("div"); d.className="msg bot typing"; el.appendChild(d); $("boothThink").classList.remove("on"); } d.textContent=text; el.scrollTop=el.scrollHeight; }
+  function onUser(bot, {convo}){ boothActive=true; $("boothWho").textContent=bot.name; renderConvo(convo); $("boothThink").classList.remove("on"); $("boothPanel").classList.add("show"); $("boothIdle").style.display="none"; $("boothText").disabled=false; $("boothSay").disabled=false; setTimeout(()=>$("boothText").focus(),0); return new Promise(res=>{ boothResolve=res; }); }
+  function boothSay(){ if(!boothResolve) return; const txt=$("boothText").value.trim(); if(!txt) return; $("boothText").value=""; const r=boothResolve; boothResolve=null; $("boothThink").classList.add("on"); $("boothText").disabled=true; $("boothSay").disabled=true; r({action:"say",text:txt}); }
+  function boothRelease(){ const r=boothResolve; boothResolve=null; boothActive=false; $("boothPanel").classList.remove("show"); $("boothIdle").style.display="block"; if(r) r({action:"release"}); }
+  $("boothSay").onclick=boothSay; $("boothRelease").onclick=boothRelease;
+  $("boothText").addEventListener("keydown",e=>{ if(e.key==="Enter") boothSay(); });
+
+  // THE SHARED TOWN TREASURY — the town has ONE money supply and ONE treasury. The 16 embodied bots you watch on the
+  // street (economy.js) and the ~1,484 abstract agents behind them (market.js) all draw wages from / pay rent into this
+  // SAME pool, so the 16 really are a sample of the 1,500 — not a separate economy. set() reconciles it from the
+  // conservation law (treasury = supply − every wallet) after any out-of-band wallet change (a rebuild or a restore).
+  // RESERVE FLOOR: the treasury won't pay wages below `reserve` — a minimum reserve requirement. This keeps the treasury
+  // visibly healthy (a conserved economy otherwise drains its clearing pool to ~0, so it always LOOKS broke) AND caps how
+  // much cash can ever be in wallets (supply − reserve), so no one — the 16 or the 1,484 — can hoard the town dry.
+  const makeTreasury=(bal=0, reserve=0)=>({ balance:()=>bal, reserve:()=>reserve, draw(a){ const d=Math.max(0,Math.min(a,bal-reserve)); bal-=d; return d; }, deposit(a){ bal+=Math.max(0,a); }, set(v){ bal=Math.max(0,v); } });
+  const TOWN=1500, PER_CAPITA=45, townSupply=TOWN*PER_CAPITA, EMBODIED=scenario.bots.length;
+  const townBank=makeTreasury(townSupply, Math.round(townSupply*0.25)); // both economies draw starting wallets from here → conserved; a 25% reserve floor keeps it liquid
+  // live-tunable knobs (the sim-speed slider writes here; cfg() builds the colony config from them)
+  const sim = { beat:3, jitter:0.02, dayNight:true };
+  const cfg = () => ({ megaphoneCooldownMs:35000, megaphonePersonalCooldownMs:120000, megaphoneInfluence:0.55, socialEvery:22, homophilyEvery:18, homophilyMargin:0.16, rng:Math.random, jitter:sim.jitter, minds:true,
+    dayNight:sim.dayNight, clock:{ enabled:sim.dayNight, cycleTicks:160 }, // ~40 social-ticks per phase → a full day turns over a few minutes; chronotypes stagger who's awake
+    traffic:{ greenTicks:340, yellowTicks:80 }, // the 4-way's lights; bots wait at a red crosswalk
+    economy:true, economyCfg:{ bank:townBank, townSupply, bankAt:12, moodPerf:true }, // BANK (shared treasury) + leave-bank/reserve-floor + bankAt 12 (a long WORKDAY). moodPerf: mood scales job PRODUCTIVITY → the pathway a mood shock reaches the economy (watch the lag in the Disorders Lab).
+    onSpeechChunk:(name,full)=>boothTyping(name,full), // stream a booth reply into a live typing bubble
+    watch:{ patrol:false }, // patrol OFF: it closed a lobby and scattered its occupants every 22 rounds — a charger-era "disruption" that now fights the social revival (gatherings need to persist for debate/witnessing). The Watch still polices open-blockers.
+    gossipAge:{ rate:0.01, floor:0.12 } }); // social rumours fade slowly (~90 social rounds) → reputation is a rolling window, not a permanent (cross-session) echo chamber
+    // NOTE: opinionDecay (society.decay) is kept as a capability but LEFT OFF — the economy already over-mixes opinions
+    // (bots rarely gather to debate), so convictions never calcify here; adding decay just wipes the already-sparse opinions.
+  let app = makeColonyApp({ scenario, mouth, onUser, now:()=>performance.now(), config:cfg() }); // creates economy → draws the 16 embodied wallets from townBank
+  // THE ECONOMY AT SCALE — the POPULATION behind the street: ~1,484 abstract agents running as pure DATA (no physics,
+  // no sprites — they have PHASES, not positions, so they can't cluster at the bank). Together with the 16 embodied
+  // bots they make one 1,500-strong town on a shared treasury. The map can switch to render all this as FLOW (📊 scale
+  // view) — aggregate circulation + wealth distribution — because you can't meaningfully draw 1,500 dots.
+  const market = makeMarket({ n:TOWN-EMBODIED, config:{ bank:townBank, townSupply, cycle:true } }); window.__market = market; // cycle:true → a slow business cycle breathes employment (money stays conserved)
+  const embodiedWallets=()=>app.colony.agents.map(a=>a.money||0); // the street bots' real balances, folded into the scale view
+  const reconcileBank=()=>townBank.set(townSupply - market.walletSum() - app.colony.agents.reduce((s,a)=>s+(a.money||0),0)); // restore conservation after any out-of-band wallet change
+  const marketStore = makeIndexedDbStorage("harmony-market","kv");
+  (async()=>{ try{ const saved = await marketStore.get("market"); if(saved){ market.restore(saved); reconcileBank(); } }catch(e){} })();
+  setInterval(async()=>{ try{ await marketStore.set("market", market.snapshot()); }catch(e){} }, 15000);
+  // INNER-LIFE PERSISTENCE: grudges/wounds ARE the durable self → stash them in IndexedDB so "days ago" is
+  // literally true. Restore on boot (and after a rebuild); save periodically. Rumination re-creates the mood.
+  const psycheStore = makeIndexedDbStorage("harmony-psyches","kv");
+  async function restorePsyches(){ try{ const saved = await psycheStore.get("psyches"); if(saved && app.restorePsyches){ app.restorePsyches(saved); line("system","the townsfolk carry old grudges from before…","brood"); } }catch(e){} }
+  restorePsyches();
+  setInterval(async()=>{ try{ if(app.snapshotPsyches) await psycheStore.set("psyches", app.snapshotPsyches()); }catch(e){} }, 15000);
+  // CULTURE PERSISTENCE — the whole CIVILIZATION (words, opinions, history, rumours) survives a reload, not just the
+  // individual selves. Restored on boot; kept across every rebuild in-memory (see rebuild()); saved periodically.
+  const cultureStore = makeIndexedDbStorage("harmony-culture","kv");
+  async function restoreCulture(){ try{ const saved = await cultureStore.get("culture"); if(saved && app.restoreCulture){ app.restoreCulture(saved); reconcileBank(); line("system","the town's words, opinions and stories return from before…","lore"); } }catch(e){} }
+  restoreCulture();
+  setInterval(async()=>{ try{ if(app.snapshotCulture) await cultureStore.set("culture", app.snapshotCulture()); }catch(e){} }, 15000);
+
+  // --- render: the CITY STREET ---
+  const bg=$("bots"); const botEls=new Map();
+  const svel=(t)=>document.createElementNS(SVGNS,t);
+  function wrect(g,cx,cy,w,h,fill,o={}){ const r=svel('rect'); r.setAttribute('x',(cx-w/2).toFixed(3)); r.setAttribute('y',(-cy-h/2).toFixed(3)); r.setAttribute('width',w.toFixed(3)); r.setAttribute('height',h.toFixed(3)); r.setAttribute('fill',fill); if(o.rx)r.setAttribute('rx',o.rx); if(o.stroke){r.setAttribute('stroke',o.stroke);r.setAttribute('stroke-width',o.sw||0.03);} if(o.opacity!=null)r.setAttribute('opacity',o.opacity); if(o.cls)r.setAttribute('class',o.cls); g.appendChild(r); return r; }
+  function wtext(g,cx,cy,txt,size,fill,o={}){ const t=svel('text'); t.setAttribute('x',cx); t.setAttribute('y',-cy); t.setAttribute('text-anchor',o.anchor||'middle'); t.setAttribute('font-size',size); t.setAttribute('fill',fill); if(o.weight)t.setAttribute('font-weight',o.weight); if(o.family)t.setAttribute('font-family',o.family); if(o.id)t.setAttribute('id',o.id); t.textContent=txt; g.appendChild(t); return t; }
+  function wline(g,x1,y1,x2,y2,stroke,sw,o={}){ const l=svel('line'); l.setAttribute('x1',x1);l.setAttribute('y1',-y1);l.setAttribute('x2',x2);l.setAttribute('y2',-y2);l.setAttribute('stroke',stroke);l.setAttribute('stroke-width',sw); if(o.dash)l.setAttribute('stroke-dasharray',o.dash); if(o.cap)l.setAttribute('stroke-linecap',o.cap); g.appendChild(l); return l; }
+  const SHOP_TINT={ 'library':['#33415f','#46567c'], 'bakery':['#5f3f47','#7c545e'], 'the bank':['#463a28','#6b5836'], 'boutique':['#4e3a56','#6a4f74'], 'orchard':['#3a5140','#4d6b54'] }; // the bank building gets a warm gold body+awning
+  function drawBuilding(z,isHome){ const g=$("buildings"); const dn=z.doorSide==='north'; const dy=dn? z.y+z.h/2 : z.y-z.h/2; const wy=z.y+(dn?-0.18:0.18);
+    if(isHome){
+      wrect(g,z.x,z.y,z.w,z.h,'#3c352c',{rx:0.05,stroke:'#0c0e14',sw:0.045});
+      const rp=svel('polygon'), ry=z.y+z.h/2, rw=z.w*0.58, rh=0.82; rp.setAttribute('points',`${(z.x-rw).toFixed(2)},${(-ry).toFixed(2)} ${(z.x+rw).toFixed(2)},${(-ry).toFixed(2)} ${z.x},${(-(ry+rh)).toFixed(2)}`); rp.setAttribute('fill','#5a4634'); rp.setAttribute('stroke','#0c0e14'); rp.setAttribute('stroke-width',0.04); g.appendChild(rp);
+      wrect(g,z.x-z.w*0.26,wy,0.5,0.5,'#e8c46b',{rx:0.05,cls:'win'}); wrect(g,z.x+z.w*0.26,wy,0.5,0.5,'#e8c46b',{rx:0.05,cls:'win'});
+    } else {
+      const [body,roof]=SHOP_TINT[z.name]||['#3a4152','#4c5a72'];
+      wrect(g,z.x,z.y,z.w,z.h,body,{rx:0.05,stroke:'#0c0e14',sw:0.045});
+      wrect(g,z.x,dy+(dn?-0.2:0.2),z.w,0.4,roof,{rx:0.04}); // awning over the frontage
+      wrect(g,z.x-z.w*0.27,wy,0.72,0.6,'#cfe0f2',{rx:0.05,cls:'win',opacity:0.8}); wrect(g,z.x+z.w*0.27,wy,0.72,0.6,'#cfe0f2',{rx:0.05,cls:'win',opacity:0.8});
+    }
+    wrect(g,z.x,dy+(dn?-0.05:0.02),0.62,0.74,'#20242e',{rx:0.05}); // door on the frontage side, onto the sidewalk
+  }
+  function drawWorld(){
+    for(const id of ['ground','road','buildings','labels','lights']) $(id).innerHTML='';
+    const gnd=$("ground"), rd=$("road"), lb=$("labels"), lt=$("lights"); const R=world.road, NS=world.sidewalk.north.y, SS=world.sidewalk.south.y, VS=1.42;
+    wrect(gnd,0,0,23,15,'#1e2c1a'); // grass base (the quadrants show through behind the buildings)
+    wrect(gnd,0,NS,23,1.05,'#3a404e'); wrect(gnd,0,SS,23,1.05,'#3a404e');           // horizontal-road sidewalks
+    wrect(gnd,-VS,R.cy,0.9,15,'#3a404e'); wrect(gnd,VS,R.cy,0.9,15,'#3a404e');       // vertical-road sidewalks
+    wrect(rd,0,R.y,23,R.h,'url(#roadG)'); wrect(rd,R.vx,R.cy,R.vw,15,'#25282f');     // the two roads (vertical drawn over the crossing)
+    wline(rd,-11.5,R.y+R.h/2,11.5,R.y+R.h/2,'#565c6c',0.05); wline(rd,-11.5,R.y-R.h/2,11.5,R.y-R.h/2,'#565c6c',0.05); // H curbs
+    // centre lines, broken across the intersection box
+    wline(rd,-11,R.y,-1.3,R.y,'#d9b24a',0.07,{dash:'0.9 0.7',cap:'round'}); wline(rd,1.3,R.y,11,R.y,'#d9b24a',0.07,{dash:'0.9 0.7',cap:'round'});
+    wline(rd,R.vx,R.cy+1.3,R.vx,7,'#d9b24a',0.07,{dash:'0.9 0.7',cap:'round'}); wline(rd,R.vx,R.cy-1.3,R.vx,-7,'#d9b24a',0.07,{dash:'0.9 0.7',cap:'round'});
+    for(const c of world.crossings){ if(c.axis==='H'){ for(let i=-2;i<=2;i++) wrect(rd,c.x,c.y+i*0.29,c.w-0.2,0.15,'#dfe6f0',{opacity:0.92,cls:'zebra zebra-'+c.id}); } else { for(let i=-2;i<=2;i++) wrect(rd,c.x+i*0.29,c.y,0.15,c.w-0.2,'#dfe6f0',{opacity:0.92,cls:'zebra zebra-'+c.id}); } } // zebra per arm
+    for(const z of scenario.zones) if(z.w) drawBuilding(z,!!z.home);
+    const bank=scenario.zones.find(z=>z.bank), well=scenario.zones.find(z=>z.booth), soap=scenario.zones.find(z=>z.megaphone);
+    // THE BANK — a building now (SE): a warm glow behind it + a gold 🏦 (drawBuilding already gave it a gold body+awning via SHOP_TINT).
+    if(bank && bank.w){ const gl=svel('circle'); gl.setAttribute('cx',bank.x);gl.setAttribute('cy',-bank.y);gl.setAttribute('r',1.8);gl.setAttribute('fill','url(#lampGlow)');gl.setAttribute('opacity',0.5); lt.appendChild(gl); wtext($("buildings"),bank.x,bank.y+0.15,'🏦',0.72,'#e5c46b'); }
+    // THE WELL (user embassy) — styled like the soapbox: a little wooden stage + a bloom.
+    if(well){ wrect($("buildings"),well.x,well.y,well.radius*1.7,well.radius*1.25,'#5a4634',{rx:0.07,stroke:'#0c0e14',sw:0.04}); wtext($("buildings"),well.x,well.y+0.06,'🌸',0.5,'#f0b0c8'); }
+    if(soap){ wrect($("buildings"),soap.x,soap.y,soap.radius*1.7,soap.radius*1.25,'#5a4634',{rx:0.07,stroke:'#0c0e14',sw:0.04}); wtext($("buildings"),soap.x,soap.y+0.06,'📣',0.5,'#e8894b'); }
+    for(const z of scenario.zones){ if(!z.w || z.bank) continue; const above=z.doorSide==='south'; wtext(lb,z.x, above? z.y+z.h/2+0.5 : z.y-z.h/2-0.42, z.name, above?0.36:0.3, above?'#cdd6e6':'#9aa2b6',{weight:above?600:400,family:'Georgia,serif'}); }
+    if(bank && bank.w){ const above=bank.doorSide==='south'; wtext(lb,bank.x, above? bank.y+bank.h/2+0.5 : bank.y-bank.h/2-0.42,'the bank',0.32,'#e5c46b',{weight:600,family:'Georgia,serif'}); }
+    if(well) wtext(lb,well.x,well.y-well.radius-0.16,'the well',0.28,'#f0b0c8',{family:'Georgia,serif'});
+    if(soap) wtext(lb,soap.x,soap.y-soap.radius-0.16,'the soapbox',0.28,'#e8894b',{family:'Georgia,serif'});
+    wtext(lb,bank?bank.x:0,-6.95,'',0.22,'#8a7a3f',{id:'chargerStatus'}); // kept for the (unused-with-economy) charger status hook
+    // TRAFFIC LIGHTS at the 4 approaches (drawn now; Phase 2 animates the .tl-<arm> dots by signal)
+    for(const c of world.crossings){ const px=c.x + (c.axis==='H'? 0 : (c.id==='N'?1:-1)*0), py=c.y; const ox=c.axis==='H'?(c.id==='W'?-0.9:0.9):0, oy=c.axis==='V'?(c.id==='N'?0.9:-0.9):0;
+      const hx=c.x+ox, hy=c.y+oy; wline(lt,hx,hy,hx,hy-0.5,'#3d424e',0.05);
+      ['#e2607a','#e8b04b','#63d29b'].forEach((col,k)=>{ const d=svel('circle'); d.setAttribute('cx',hx);d.setAttribute('cy',-(hy+0.02+k*0.16));d.setAttribute('r',0.06);d.setAttribute('fill',col);d.setAttribute('opacity',0.22);d.setAttribute('class','tl tl-'+c.id+' tl'+k); lt.appendChild(d); }); }
+    for(const p of [[-VS-0.4,NS],[VS+0.4,NS],[-VS-0.4,SS],[VS+0.4,SS],[-6.5,NS],[6.5,NS],[-6.5,SS],[6.5,SS]]){
+      const glow=svel('circle'); glow.setAttribute('cx',p[0]);glow.setAttribute('cy',-p[1]);glow.setAttribute('r',1.35);glow.setAttribute('fill','url(#lampGlow)');glow.setAttribute('class','lamp');glow.setAttribute('opacity',0.12); lt.appendChild(glow);
+      const lamp=svel('circle'); lamp.setAttribute('cx',p[0]);lamp.setAttribute('cy',-p[1]);lamp.setAttribute('r',0.1);lamp.setAttribute('fill','#ffe6ad'); lt.appendChild(lamp);
+    }
+  }
+  drawWorld(); let lastPhase=null, lastTraffic=null;
+  function render(s){
+    $("mTribes").textContent=s.metrics.tribeCount; $("mPol").textContent=s.metrics.polarization.toFixed(2); $("mCon").textContent=s.metrics.consensus.toFixed(2); $("mTopic").textContent=s.topic;
+    if(s.economy) $("mEcon").textContent=`🏦 treasury ${s.economy.treasury} / ${s.economy.supply}`;
+    { const awake=s.bots.filter(b=>!b.asleep).length; $("mClock").textContent = s.clock ? `${s.clock.glyph} ${s.clock.phase} · ${awake}/${s.bots.length} awake` : "🕒 no cycle"; }
+    if(s.clock && s.clock.phase!==lastPhase){ lastPhase=s.clock.phase; const ph=s.clock.phase; // light the street by time of day
+      $("nightVeil").setAttribute('opacity', ph==='night'?0.55: ph==='dusk'?0.32: ph==='dawn'?0.18: 0);
+      const lit= ph==='night'?0.95: ph==='dusk'?0.6: ph==='dawn'?0.28: 0.1;
+      document.querySelectorAll('#lights .lamp').forEach(e=>e.setAttribute('opacity',lit));
+      document.querySelectorAll('.win').forEach(e=>e.setAttribute('opacity',(ph==='night'||ph==='dusk')?1:0.55)); }
+    if(s.traffic){ const t=s.traffic, key=t.phase; if(key!==lastTraffic){ lastTraffic=key; // update the signals on a phase change
+      for(const c of world.crossings){ const car = c.axis==='H'? t.carH : t.carV, walk = c.axis==='H'? t.walkH : t.walkV;
+        document.querySelectorAll('.tl-'+c.id).forEach((d,k)=>{ const on=(k===0&&car==='red')||(k===1&&car==='yellow')||(k===2&&car==='green'); d.setAttribute('opacity', on?1:0.14); });
+        document.querySelectorAll('.zebra-'+c.id).forEach(z=>z.setAttribute('opacity', walk?0.95:0.28)); }
+      const gl={H:'☰',V:'|'}; $("mTraffic").textContent = `🚦 ${t.carH==='green'?'E–W':t.carV==='green'?'N–S':'…'} go`; } }
+    $("btnMega").textContent = s.megaphone.ready?"📣 megaphone: CHARGED":`📣 megaphone: ${Math.ceil(s.megaphone.cooldownLeft/1000)}s`;
+    $("btnMega").classList.toggle("on", s.megaphone.ready);
+    for(const b of s.bots){ let g=botEls.get(b.name); if(!g){ g=document.createElementNS(SVGNS,"g"); const c=document.createElementNS(SVGNS,"circle"); c.setAttribute("r","0.28"); c.setAttribute("class","body"); c.setAttribute("stroke-width","0.07"); const t=document.createElementNS(SVGNS,"text"); t.setAttribute("text-anchor","middle"); t.setAttribute("font-size","0.26"); t.setAttribute("y","-0.4"); t.setAttribute("fill","var(--ink)"); const st=document.createElementNS(SVGNS,"text"); st.setAttribute("text-anchor","middle"); st.setAttribute("font-size","0.2"); st.setAttribute("y","0.08"); st.setAttribute("fill","#0b0d12"); g.append(c,t,st); bg.appendChild(g); botEls.set(b.name,{g,c,t,st}); g=botEls.get(b.name); }
+      const col=TRIBE_COLORS[b.tribe%TRIBE_COLORS.length]; g.g.setAttribute("transform",`translate(${b.x},${-b.y})`); g.c.setAttribute("fill",col); g.c.setAttribute("opacity",0.35+0.65*Math.min(1,b.confidence));
+      g.g.setAttribute("opacity", b.asleep?0.3:1); // dormant townsfolk fade back — asleep in their apartments
+      // battery = the outline: green→amber→red; charging knights get a bright ⚡ label
+      // the OUTLINE = wealth when the economy's on (green flush → amber tight → red in the red), else battery
+      let outline; if(b.money!=null){ const net=b.money-(b.rentDue||0); outline = net>6?"#63d29b": net>-2?"#e8b04b":"#e2607a"; } else { const bat=b.battery; outline = bat>50?"#63d29b":bat>22?"#e8b04b":"#e2607a"; } g.c.setAttribute("stroke",outline);
+      // mood: the NAME is tinted by valence (content→warm, stressed→cool) + a face when it's strong
+      const v=b.mood?b.mood.valence:0, face=v>0.35?" ☺":v<-0.35?" ✖":"";
+      g.t.setAttribute("fill", v>0.2?"#8fe0b4":v<-0.2?"#ec8fa4":"var(--ink)");
+      g.t.textContent=b.name+face+(b.asleep?" 😴":"")+(b.money!=null?` $${b.money}`:(b.charge==="charging"?" ⚡":b.charge==="queued"?" …":"")); g.st.textContent=b.stance>0.15?"+":b.stance<-0.15?"–":"·"; }
+    if(s.charger){ const cs=document.getElementById("chargerStatus"); if(cs) cs.textContent=`${s.charger.portsFree}/${s.charger.ports} free · ${s.charger.queue} in line`; }
+    // booth panel is RENDER-AUTHORITATIVE: it's shown iff a human decision is actually pending. This clears
+    // any stale panel the moment the interaction ends or the bot leaves (fixes the "doesn't clear" bug).
+    $("boothPanel").classList.toggle("show", boothActive);
+    $("boothIdle").style.display = boothActive?"none":"block";
+    if(!boothActive) $("boothIdle").textContent = s.booth&&s.booth.occupant ? `${s.booth.occupant} is heading to the well…` : "No one at the well. Curious townsfolk will wander over — talk as long as you like, then send them off.";
+    // log (append-only diff)
+    for(const e of s.events){ if(e._shown) continue; e._shown=true; line(e.kind, e.text||"", e.kind); }
+  }
+  // --- the ECONOMY-AT-SCALE flow view: 1,500 agents drawn as CIRCULATION + DISTRIBUTION, never as dots ---
+  const flow=$("flow"), fx={ bars:[] }; const HBINS=14, HX0=10, HX1=192, HY=122, HH=42;
+  const fel=(tag,attrs,parent)=>{ const e=document.createElementNS(SVGNS,tag); for(const k in attrs) e.setAttribute(k,attrs[k]); (parent||flow).appendChild(e); return e; };
+  const ftext=(x,y,txt,cls,extra)=>{ const t=fel('text',{x,y,'text-anchor':'middle',class:cls,...(extra||{})}); t.textContent=txt; return t; };
+  function buildFlow(){
+    ftext(6,7,'THE ECONOMY AT SCALE','ftitle',{'font-size':4,fill:'var(--gold)','text-anchor':'start'});
+    fx.cyc=ftext(194,7,'','ftitle',{'font-size':4,'text-anchor':'end'}); // business-cycle readout (boom / recession / steady)
+    fx.sub=ftext(6,11.2,'one town · conserved · no queue, no clustering','fsub',{'text-anchor':'start'});
+    // faint agent-cycle ring (work → bank → home → work) drawn behind everything
+    fel('path',{class:'cycle',d:'M112,17 Q152,20 158,37'}); fel('path',{class:'cycle',d:'M158,53 Q100,74 42,53'}); fel('path',{class:'cycle',d:'M42,37 Q52,20 88,17'});
+    // the two MONEY streams (animated), behind the nodes: wages OUT of the treasury (green), rent IN (gold)
+    fx.wages=fel('path',{class:'stream',stroke:'var(--ok)',d:'M123,44 C132,42 135,46 141,46'});
+    fx.rent =fel('path',{class:'stream',stroke:'var(--gold)',d:'M59,46 C66,46 70,44 77,44'});
+    ftext(132,40,'wages','fsub',{fill:'var(--ok)','font-size':2.4}); ftext(66,53,'rent','fsub',{fill:'var(--gold)','font-size':2.4});
+    // TREASURY hub + the three phase nodes
+    fel('rect',{x:77,y:34,width:46,height:20,rx:3,class:'fhub'}); ftext(100,40,'TREASURY','ftitle',{fill:'var(--gold)'}); fx.tTre=ftext(100,49,'—','fbig',{fill:'var(--gold)'});
+    const node=(cx,cy,w,h,name,color)=>{ fel('rect',{x:cx-w/2,y:cy-h/2,width:w,height:h,rx:2.5,class:'fnode'}); ftext(cx,cy-h/2+4,name,'ftitle'); return ftext(cx,cy-h/2+11,'—','fbig',{fill:color}); };
+    fx.tWork=node(100,13,46,14,'AT WORK','#8fb4ff'); fx.tBank=node(162,45,40,15,'BANKING','#7fe0c0'); fx.tHome=node(38,45,40,15,'AT HOME','#e8b878');
+    // stats chip line
+    fx.chip=fel('text',{x:6,y:66,'text-anchor':'start',class:'chip'});
+    // wealth-distribution histogram
+    ftext(6,74.5,'WEALTH DISTRIBUTION','ftitle',{'text-anchor':'start'}); fx.gini=fel('text',{x:194,y:74.5,'text-anchor':'end',class:'ftitle'});
+    fel('line',{x1:HX0,y1:HY,x2:HX1,y2:HY,class:'axis'});
+    const bw=(HX1-HX0)/HBINS;
+    for(let i=0;i<HBINS;i++){ const col=i<4?'#e2607a':i<9?'#e8b04b':'#63d29b'; fx.bars.push(fel('rect',{x:HX0+i*bw+0.6,y:HY,width:bw-1.2,height:0,class:'hbar',fill:col,opacity:0.9})); }
+    fx.avg=fel('line',{x1:HX0,y1:HY-HH,x2:HX0,y2:HY+2,stroke:'#cdd6e6','stroke-width':0.4,'stroke-dasharray':'1 1',opacity:0}); fx.avgL=ftext(HX0,HY-HH-1,'','fsub',{fill:'#cdd6e6'});
+    ftext(HX0,HY+5,'$0','fsub',{'text-anchor':'start'}); fx.hmax=ftext(HX1,HY+5,'','fsub',{'text-anchor':'end'});
+  }
+  buildFlow();
+  function renderFlow(st){
+    fx.tTre.textContent='$'+st.treasury.toLocaleString(); fx.tWork.textContent=st.working; fx.tBank.textContent=st.banking; fx.tHome.textContent=st.home;
+    if(fx.sub) fx.sub.textContent=`${st.n.toLocaleString()} townsfolk — ${st.embodied} embodied on the street + ${st.abstractN.toLocaleString()} abstract · one shared treasury`;
+    if(fx.cyc){ const lab=st.cycleLabel||'steady', ic=lab==='boom'?'☀':lab==='recession'?'🌧':'—', col=lab==='boom'?'var(--ok)':lab==='recession'?'var(--err)':'var(--dim)'; fx.cyc.textContent=`${ic} ${lab.toUpperCase()} · ${Math.round(st.employedFrac*100)}% employed`; fx.cyc.setAttribute('fill',col); }
+    const sw=r=>Math.max(0.4,Math.min(9,Math.sqrt(r)*1.7)), op=r=>r>0.05?0.95:0.1;
+    fx.wages.setAttribute('stroke-width',sw(st.flowWages)); fx.wages.setAttribute('opacity',op(st.flowWages));
+    fx.rent.setAttribute('stroke-width',sw(st.flowRent)); fx.rent.setAttribute('opacity',op(st.flowRent));
+    fx.chip.innerHTML=`supply <tspan>$</tspan>${(st.supply).toLocaleString()}   ·   avg wallet <tspan>$</tspan>${st.avg}   ·   richest <tspan>$</tspan>${st.max}   ·   broke <tspan></tspan>${st.broke}`;
+    fx.gini.textContent=`Gini ${st.gini.toFixed(2)} — ${st.gini<0.28?'even':st.gini<0.4?'mild spread':'sharp divide'}`;
+    const mx=Math.max(1,...st.buckets), bw=(HX1-HX0)/HBINS;
+    for(let i=0;i<HBINS;i++){ const h=st.buckets[i]/mx*HH; fx.bars[i].setAttribute('y',(HY-h).toFixed(1)); fx.bars[i].setAttribute('height',h.toFixed(1)); }
+    const ax=Math.min(HX1,HX0+(st.avg/st.binSpan)*(HX1-HX0)); fx.avg.setAttribute('x1',ax); fx.avg.setAttribute('x2',ax); fx.avg.setAttribute('opacity',0.7); fx.avgL.setAttribute('x',ax); fx.avgL.textContent='avg $'+st.avg;
+    fx.hmax.textContent='$'+Math.round(st.binSpan)+'+';
+  }
+  const logEl=$("log"); let logSeen=new WeakSet();
+  function line(tag,text,cls){ const d=document.createElement("div"); d.className="ln"; d.innerHTML=`<span class="tag">${tag}</span><span class="${cls}">${escape(text)}</span>`; logEl.appendChild(d); while(logEl.children.length>160) logEl.removeChild(logEl.firstChild); logEl.scrollTop=logEl.scrollHeight; }
+  const escape=(s)=>String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+
+  // --- loops: FRONT-END DECOUPLED FROM BACKEND ---
+  // The visuals glide every animation frame (drawBotsQuick — just moves the sprites, cheap); the SIM advances in
+  // fixed 0.02 steps via an accumulator scaled by sim.beat (sim-seconds per real-second = the backend's speed). If
+  // a frame's worth of backend can't keep up it's dropped (steps cap), so the movement NEVER waits on the logic.
+  // The heavier dashboard (labels/moods/metrics/log/lights) refreshes on a calmer cadence.
+  let running=false, scaleOn=false, boothTimer=null, megaTimer=null, lobbyTimer=null, climateTimer=null, rafId=null, lastT=0, acc=0, lastFull=0; const DT=0.02;
+  function drawBotsQuick(){ for(const a of app.colony.agents){ const g=botEls.get(a.name); if(g) g.g.setAttribute("transform",`translate(${a.mover.pose.x.toFixed(3)},${(-a.mover.pose.y).toFixed(3)})`); } }
+  function frameLoop(now){
+    rafId=requestAnimationFrame(frameLoop);
+    if(!running){ lastT=now; return; }
+    if(!lastT) lastT=now;
+    acc += Math.min((now-lastT)/1000, 0.05) * (sim.beat||3); lastT=now;
+    let steps=0; while(acc>=DT && steps<28){ app.tick(DT); market.tick(); acc-=DT; steps++; } // the 1,500-agent market rides the same backend beat
+    if(steps>=28) acc=0;                       // fell behind → drop the backlog; keep the picture moving
+    if(!scaleOn) drawBotsQuick();               // smooth sprite movement, every frame (skipped when watching the flow)
+    if(now-lastFull > 130){ lastFull=now; const s=app.state(); render(s); const mst=market.stats(14,embodiedWallets()); $("mScale").textContent=`📊 ${mst.n} · Gini ${mst.gini.toFixed(2)}${mst.cycle?` · ${mst.cycleLabel==='boom'?'☀':mst.cycleLabel==='recession'?'🌧':'—'} ${mst.cycleLabel}`:''}`; if(scaleOn) renderFlow(mst); } // dashboard on a calmer beat
+  }
+  // ECONOMIC CLIMATE — the one coupling that makes the macro economy MATTER to the 16 you watch. The 1,500-agent
+  // business cycle (an abstract chart) here reaches into the embodied townsfolk: a boom lifts everyone's mood, a
+  // recession weighs on them. These are pure mood nudges (record:false → no false "memories"), but mood feeds each
+  // psyche's disposition (cooperation ↓, volatility ↑ in hard times) AND their name-tint, so a downturn visibly cools
+  // the street and ripples through the social layer. Era changes (steady→boom/recession) get one rate-limited log line.
+  let lastClimate=null, lastClimateAt=-1e9;
+  function economicClimate(){
+    if(!running) return;
+    const st = market.stats(); const phase = st.cyclePhase||0;
+    for(const a of app.colony.agents){ if(!a.mind||a.asleep) continue; a.mind.experience({ valence:0.09*phase, arousal: phase<0? 0.045*-phase : 0.02, kind:"economy", record:false }); }
+    if(st.cycleLabel!==lastClimate){ const t=performance.now();
+      if((st.cycleLabel==="recession"||st.cycleLabel==="boom") && t-lastClimateAt>15000){ lastClimateAt=t;
+        line("brood", st.cycleLabel==="recession" ? "🌧 hard times settle over Harmony Hollow — a weight hangs in the air" : "☀ the town prospers — spirits lift on the street", st.cycleLabel==="recession"?"brood":"amends");
+        if(app.chronicle) app.chronicle.observe({ kind:"economy-era", label: st.cycleLabel }); } // the era passes into the town's inherited history
+      lastClimate=st.cycleLabel;
+    }
+  }
+  function loops(){
+    rafId=requestAnimationFrame(frameLoop);
+    boothTimer=setInterval(async()=>{ if(!running||boothBusy||boothActive) return; boothBusy=true; try{ await app.serviceBooth(); } finally{ boothBusy=false; } }, 500);
+    megaTimer=setInterval(async()=>{ if(!running) return; try{ await app.serviceMegaphone(); }catch(e){} }, 2500); // the SOAPBOX state machine, self-gated by cooldowns
+    lobbyTimer=setInterval(async()=>{ if(!running) return; try{ await app.serviceLobbies(); }catch(e){} }, 4000); // townsfolk debate (self-gated)
+    climateTimer=setInterval(economicClimate, 2600); // couple the macro business cycle into the embodied townsfolk's mood
+  }
+  loops();
+  render(app.state()); // draw the initial (paused) frame so the map + metrics show before you hit run
+  { const mst=market.stats(14,embodiedWallets()); $("mScale").textContent=`📊 ${mst.n} · Gini ${mst.gini.toFixed(2)}${mst.cycle?` · ${mst.cycleLabel==='boom'?'☀':mst.cycleLabel==='recession'?'🌧':'—'} ${mst.cycleLabel}`:''}`; renderFlow(mst); }
+  window.__pump = (n=1,ticksApp=true)=>{ for(let i=0;i<n;i++){ if(ticksApp) app.tick(DT); market.tick(); } const s=app.state(); render(s); drawBotsQuick(); const mst=market.stats(14,embodiedWallets()); $("mScale").textContent=`📊 ${mst.n} · Gini ${mst.gini.toFixed(2)}${mst.cycle?` · ${mst.cycleLabel==='boom'?'☀':mst.cycleLabel==='recession'?'🌧':'—'} ${mst.cycleLabel}`:''}`; renderFlow(mst); return mst; }; // dev: drive + render N backend steps without the rAF loop (for headless/background verification)
+  $("btnRun").onclick=()=>{ running=!running; $("btnRun").textContent=running?"⏸ pause":"▶ run"; $("btnRun").classList.toggle("on",running); };
+  $("btnScale").onclick=()=>{ scaleOn=!scaleOn; $("flowView").classList.toggle("show",scaleOn); $("btnScale").classList.toggle("on",scaleOn); $("btnScale").textContent=scaleOn?"🏙 street view":"📊 scale view"; if(scaleOn) renderFlow(market.stats(14,embodiedWallets())); }; // swap the map between the 16-bot street and the 1,500-agent flow
+  $("mouth").onchange=()=>{ buildMouth(); pingOllama(); line("system", "voices → "+$("mouth").value, "booth"); rebuild(); };
+  $("model").onchange=()=>{ buildMouth(); pingOllama(); rebuild(); };
+  $("streamChk").onchange=()=>{ buildMouth(); rebuild(); line("system","booth voices → "+($("streamChk").checked?"streaming (types out, early-stop)":"whole-line"),"booth"); };
+  $("btnMega").onclick=async()=>{ await app.serviceMegaphone(); };
+  $("sSpeed").oninput=e=>{ sim.beat=+e.target.value; $("oSpeed").textContent=sim.beat+"×"; }; // backend speed (sim-seconds per real-second); visuals stay smooth regardless
+  function rebuild(){ const culture = app.snapshotCulture ? app.snapshotCulture() : null; app = makeColonyApp({ scenario, mouth, onUser, now:()=>performance.now(), config:cfg() }); if(culture && app.restoreCulture) app.restoreCulture(culture); reconcileBank(); restorePsyches(); [...botEls.values()].forEach(v=>v.g.remove()); botEls.clear(); drawWorld(); render(app.state()); } // carry the culture across the reconstruct (a rebuild must not wipe the civilization; reconcile the shared treasury against the carried-over wallets)
+
+  // --- add a townsperson (a multi-line persona from the user) ---
+  function fillZoneSelect(){ const sel=$("newZone"); sel.innerHTML=""; for(const z of scenario.zones){ if(z.booth||z.charger||z.home||z.megaphone) continue; const o=document.createElement("option"); o.value=z.name; o.textContent=z.name; sel.appendChild(o); } }
+  fillZoneSelect();
+  $("btnAdd").onclick=()=>{
+    const name=$("newName").value.trim(), persona=$("newPersona").value.trim();
+    if(!name||!persona){ line("system","give them a name AND a description","system"); return; }
+    if(scenario.bots.some(b=>b.name.toLowerCase()===name.toLowerCase())){ line("system",`${name} already lives here`,"system"); return; }
+    const zone=$("newZone").value, stance=parseFloat($("newStance").value)||0;
+    scenario.bots.push({ name, persona, startZone:zone, curiosity:0.55 });
+    scenario.openness[name]=0.5;
+    $("newName").value=""; $("newPersona").value=""; $("newStance").value=0;
+    rebuild(); // preserves the town's culture across the reconstruct
+    // ENCULTURATE the newcomer: it arrives already knowing the town's words, stories, and who's who — not blank.
+    const got = app.induct ? app.induct(name) : null;
+    if(Math.abs(stance)>0.05) app.society.absorb(name, { topic: app.topic, stance, fidelity:0.9 }); // their own chosen lean, on top of what they inherited
+    render(app.state());
+    line("system", got&&(got.words||got.reputations||got.lore) ? `✦ ${name} is welcomed into town — inherits ${got.words} word${got.words===1?"":"s"}, ${got.reputations} name${got.reputations===1?"":"s"}, and the town's stories` : `✦ ${name} moves into town (${zone})`, "lore");
+  };
+
+  // --- dynamics: sample metrics @1Hz → sparklines + rumour bars; export a run's data ---
+  const hist={ pol:[], tribes:[], con:[] }; const HIST_MAX=120;
+  function spark(id,arr,lo,hi){ const el=document.querySelector('#'+id+' polyline'); if(!el) return; if(arr.length<2){ el.setAttribute('points',''); return; } const n=arr.length, span=(hi-lo)||1;
+    el.setAttribute('points', arr.map((v,i)=>((i/(n-1))*100).toFixed(1)+','+Math.max(1,Math.min(21,22-((v-lo)/span)*20-1)).toFixed(1)).join(' ')); }
+  function sampleDynamics(s){ const m=s.metrics;
+    if(app.observatory){ const r=app.observatory.report(); $("civ").innerHTML=`🔭 <b>${r.rounds}</b> rounds · dialect <b>${r.dialect.active}</b> (<b>${r.dialect.official}</b> official, churn ${r.dialect.churnPerRound}/rd) · <b>${r.myth.legends}</b> legends · split ${Math.round(r.opinion.splitFraction*100)}% · hierarchy ${r.reputation.churn===0?'<b>stable</b>':'churn '+r.reputation.churn} · <b>${r.transmission.nowInheritable}</b> inheritable`; }
+    hist.pol.push(m.polarization); hist.tribes.push(m.tribeCount); hist.con.push(m.consensus);
+    for(const k in hist) if(hist[k].length>HIST_MAX) hist[k].shift();
+    $("cPol").textContent=m.polarization.toFixed(2); $("cTribes").textContent=m.tribeCount; $("cCon").textContent=m.consensus.toFixed(2);
+    spark('chPol',hist.pol,0,1); spark('chTribes',hist.tribes,0,Math.max(2,...hist.tribes)); spark('chCon',hist.con,0,1);
+    if(s.rumors&&s.rumors.length) $("rumors").innerHTML=s.rumors.map(r=>`<div class="r"><span class="t">“${escape((r.origin||'…').slice(0,40))}”</span> · ${Math.round(r.reach*100)}% heard · fidelity ${Math.round(r.avgFidelity*100)}%<div class="rbar"><i style="width:${Math.round(r.reach*100)}%"></i></div></div>`).join('');
+    if(s.dictionary&&s.dictionary.length) $("lexicon").innerHTML=s.dictionary.map(d=>`<div class="r"><span class="t">${escape(d.token)}</span><span class="badge ${d.status||'proposed'}">${d.status||'proposed'}</span> — ${escape(d.meaning)} <span style="color:var(--dim)">(${d.coiner}, ${Math.round(d.reach*100)}% know it)</span><div class="rbar"><i style="width:${Math.round(d.reach*100)}%"></i></div></div>`).join('');
+    if($("dictModal").classList.contains("show")) renderDict(s); }
+  // the full dictionary popup — every word, its status, meaning, coiner and the keeper who filed it
+  function renderDict(s){ const lx=s.lexicon||{entries:[],keeper:null}; $("dictKeeper").textContent = lx.keeper?`· kept by ${lx.keeper}`+(s.watch&&s.watch.post?` · 🛡 posted in ${s.watch.post}`:''):'';
+    $("dictBody").innerHTML = lx.entries.length ? lx.entries.map(d=>`<div class="de"><span class="w">${escape(d.token)}</span><span class="badge ${d.status||'proposed'}">${d.status||'proposed'}</span><div class="m">${escape(d.meaning)}</div><div class="meta">coined by ${escape(d.coiner)} · ${Math.round(d.reach*100)}% of town knows it${d.curatedBy?` · filed by ${escape(d.curatedBy)}`:''}</div></div>`).join('') : `<div style="color:var(--dim);font-size:12px">No words coined yet. Run the town — curious bots invent words, and ${lx.keeper||'the keeper'} files the ones that catch on.</div>`;
+    const ch=s.chronicle||{lore:[]}; const lore=[...ch.lore].reverse();
+    $("chronBody").innerHTML = lore.length ? lore.map(e=>`<div class="de"><span class="badge ${e.kind==='schism'?'obsolete':e.kind==='healing'?'official':'proposed'}">${e.kind}</span> <span class="m" style="display:inline">${escape(e.summary)}</span> <span class="meta" style="display:inline">· round ${e.round}</span></div>`).join('') : `<div style="color:var(--dim);font-size:12px">Nothing legendary yet. As the town splits, reconciles, coins words, and rallies, its history is written here — and a newcomer inherits it.</div>`; }
+  setInterval(()=>{ if(running) sampleDynamics(app.state()); }, 1000);
+  $("btnExport").onclick=()=>{ const s=app.state(); const data={ topic:scenario.topic, tuning:sim, civilization: app.observatory?app.observatory.report():null, civilizationSeries: app.observatory?app.observatory.series():[], chronicle: s.chronicle, metricsHistory:hist, rumors:s.rumors, bots:s.bots, events:s.events, mouthTranscript: mouth&&mouth.transcript?mouth.transcript():[] };
+    const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'})); a.download='harmony-hollow-run.json'; a.click(); line("system","exported run data","user"); };
+
+  $("btnDayNight").onclick=()=>{ sim.dayNight=!sim.dayNight; $("btnDayNight").textContent=`🌗 day/night: ${sim.dayNight?"on":"off"}`; $("btnDayNight").classList.toggle("on", sim.dayNight); rebuild(); line("system", sim.dayNight?"the day/night cycle begins — townsfolk keep their own hours":"eternal daylight — everyone stays awake", "phase"); };
+  $("btnDict").onclick=()=>{ $("dictModal").classList.add("show"); renderDict(app.state()); };
+  $("dictClose").onclick=()=>$("dictModal").classList.remove("show");
+  $("dictModal").addEventListener("click",e=>{ if(e.target===$("dictModal")) $("dictModal").classList.remove("show"); });
+  $("coinBtn").onclick=()=>{ const w=$("coinWord").value.trim(); if(!w||!app.rumors) return; const speaker=app.state().bots[0]?.name||"someone"; app.rumors.coinMeme(speaker, w, $("coinMean").value.trim()); $("coinWord").value=""; $("coinMean").value=""; line("system",`${speaker} coins the word “${w}” — watch it spread`,"witness"); };
+
+  // --- THE DISORDERS LAB — lesion ANY set of neuromodulator channels, watch the cascade (one bot + the whole town) ---
+  const LAB_HEALTHY={ dopamine:0.2, serotonin:0.5, norepinephrine:0.3, acetylcholine:0.3 };
+  const LAB_ABBR={ dopamine:'DA', serotonin:'5HT', norepinephrine:'NE', acetylcholine:'ACh' };
+  const lab = { targets:{...LAB_HEALTHY}, armed:{}, scope:'town', bot:null, busy:false, abort:false, baseline:null, hist:[], spec:'',
+    series:{ dopamine:[], serotonin:[], norepinephrine:[], acetylcholine:[], valence:[], arousal:[] },
+    tseries:{ mood:[], perf:[], wealth:[] } };
+  const LCAP=120, clab=v=>v<0?0:v>1?1:v, mean=a=>a.reduce((x,y)=>x+y,0)/(a.length||1);
+  const mindOf=(name)=>{ const a=app.colony.agents.find(x=>x.name===name); return a&&a.mind?a.mind:null; };
+  const scopeMinds=()=> (lab.scope==='bot' ? [mindOf(lab.bot)] : app.colony.agents.map(a=>a.mind)).filter(Boolean);
+  const armedList=()=> Object.keys(lab.armed).filter(c=>lab.armed[c]);
+  function labFillBots(){ const sel=$("labBot"); sel.innerHTML=''; for(const a of app.colony.agents){ const o=document.createElement('option'); o.value=a.name; o.textContent=a.name; sel.appendChild(o);} if(!lab.bot||!app.colony.agents.some(a=>a.name===lab.bot)) lab.bot=app.colony.agents[0]?.name||null; if(lab.bot) sel.value=lab.bot; }
+  function curScale(){ const st=app.state(); const vs=st.bots.map(b=>b.mood?b.mood.valence:0), ar=st.bots.map(b=>b.mood?b.mood.arousal:0), w=st.bots.map(b=>b.money||0); const perf = (app.economy&&app.economy.perf) ? mean(app.colony.agents.map(a=>app.economy.perf(a))) : 1; return { avgV:+mean(vs).toFixed(2), avgA:+mean(ar).toFixed(2), avgP:+perf.toFixed(2), avgW:Math.round(mean(w)), neg:vs.filter(x=>x<-0.2).length, tribes:st.metrics.tribeCount, treasury:st.economy?st.economy.treasury:0 }; }
+  function drawSpark(id, series, lo, hi, setpoint){ const svg=$(id).querySelector('svg'); const pl=svg.querySelector('polyline'); const norm=v=>34-clab((v-lo)/(hi-lo))*34; const n=series.length; pl.setAttribute('points', series.map((v,i)=>`${(n<=1?0:i/(n-1)*120).toFixed(1)},${norm(v).toFixed(1)}`).join(' ')); if(setpoint!=null){ const set=svg.querySelector('.set'); if(set){ const sy=norm(setpoint); set.setAttribute('y1',sy); set.setAttribute('y2',sy); } } }
+  function labSample(){ const m=mindOf(lab.bot); if(m){ const chans={ dopamine:m.channel('dopamine'), serotonin:m.channel('serotonin'), norepinephrine:m.channel('norepinephrine'), acetylcholine:m.channel('acetylcholine') }, mood=m.mood();
+      const push=(k,v)=>{ const a=lab.series[k]; a.push(v); if(a.length>LCAP) a.shift(); };
+      for(const c in chans){ push(c,chans[c].level); } push('valence',mood.valence); push('arousal',mood.arousal);
+      const drawCh=(id,c,hi)=>{ drawSpark(id,lab.series[c],0,hi,chans[c].setpoint); $(id).querySelector('.lab b').textContent=chans[c].level.toFixed(2)+' →'+chans[c].setpoint.toFixed(2); };
+      drawCh('spkD','dopamine',1.2); drawCh('spkS','serotonin',1.2); drawCh('spkN','norepinephrine',1.5); drawCh('spkA','acetylcholine',1.2);
+      { const pl=$("spkV").querySelector('polyline'), n=lab.series.valence.length; pl.setAttribute('points', lab.series.valence.map((v,i)=>`${(n<=1?0:i/(n-1)*120).toFixed(1)},${(17-clab((v+1)/2)*34).toFixed(1)}`).join(' ')); $("spkV").querySelector('.lab b').textContent=mood.valence.toFixed(2); }
+      drawSpark('spkAr',lab.series.arousal,0,1,null); $("spkAr").querySelector('.lab b').textContent=mood.arousal.toFixed(2);
+      const a=app.colony.agents.find(x=>x.name===lab.bot); $("labDoing").textContent = a? (a.asleep?'asleep at home':(a.mover.hasGoal()?'walking':(a.zone||'on the street'))) : '–'; }
+    const now=curScale(), b=lab.baseline, r=(label,v,bv,fmt)=>{ const f=fmt||(x=>x); const dv=bv!=null?v-bv:null; const arr=dv==null?'':Math.abs(dv)<0.005?'·':dv>0?'▲':'▼'; const col=(label==='avg mood'||label==='job productivity')?(dv>0?'var(--ok)':dv<0?'var(--err)':'var(--dim)'):'var(--dim)'; return `<div class="m"><span>${label}</span><span><b>${f(v)}</b> <span class="d" style="color:${col}">${bv!=null?arr+' from '+f(bv):''}</span></span></div>`; };
+    // town time-series — the LAG made visible: mood + productivity track the shock instantly, wealth (the downstream) drifts slowly
+    const pt=(k,v)=>{ const a=lab.tseries[k]; a.push(v); if(a.length>LCAP) a.shift(); }; pt('mood',now.avgV); pt('perf',now.avgP); pt('wealth',now.avgW);
+    { const pl=$("spkTM").querySelector('polyline'), n=lab.tseries.mood.length; pl.setAttribute('points', lab.tseries.mood.map((v,i)=>`${(n<=1?0:i/(n-1)*120).toFixed(1)},${(17-clab((v+1)/2)*34).toFixed(1)}`).join(' ')); $("spkTM").querySelector('.lab b').textContent=now.avgV; }
+    drawSpark('spkTP',lab.tseries.perf,0,1.4,1); $("spkTP").querySelector('.lab b').textContent=now.avgP;
+    { const s=lab.tseries.wealth, lo=s.length?Math.min(...s):0, hi=s.length?Math.max(...s):1; drawSpark('spkTW',s,lo-1,hi+1,null); $("spkTW").querySelector('.lab b').textContent='$'+now.avgW; }
+    $("labScale").innerHTML = r('avg mood',now.avgV,b?b.avgV:null) + r('avg arousal',now.avgA,b?b.avgA:null) + r('job productivity',now.avgP,b?b.avgP:null) + r('avg wealth',now.avgW,b?b.avgW:null,v=>'$'+v) + r('bots low',now.neg,b?b.neg:null) + r('tribes',now.tribes,b?b.tribes:null);
+  }
+  const setInduce=(run)=>{ $("btnInduce").textContent = run?'⨯ abort':'▶ induce'; $("btnInduce").classList.toggle('on',run); };
+  async function labRun(){ if(lab.busy||!app.colony.agents.length) return; const armed=armedList(); if(!armed.length){ line("system","🧪 arm at least one channel (tick it or drag its slider) before inducing","system"); return; }
+    lab.busy=true; lab.abort=false; setInduce(true); const dur=+$("labDur").value, wasRunning=running; running=false;
+    if($("labAutoHeal").checked){ for(const a of app.colony.agents) if(a.mind&&a.mind.resetChem) a.mind.resetChem(); } // independent trial → snap to a CLEAN healthy baseline first
+    lab.spec = armed.map(c=>`${LAB_ABBR[c]}→${lab.targets[c]}`).join(', ');
+    for(const k in lab.series) lab.series[k]=[]; for(const k in lab.tseries) lab.tseries[k]=[];
+    lab.baseline=curScale();
+    for(const m of scopeMinds()) for(const c of armed) m.lesion(c, lab.targets[c]);
+    line("system",`🧪 inducing ${lab.spec} on ${lab.scope==='bot'?lab.bot:'the whole town'} — watch it cascade`,"brood");
+    const prog=makeProgress({ total:dur, label:'inducing', sink:$("labProg") }); let done=0;
+    await new Promise(res=>{ function step(){ if(lab.abort||done>=dur){ res(); return; } const batch=Math.min(40,dur-done); for(let i=0;i<batch;i++){ app.tick(DT); market.tick(); } done+=batch; prog.set(done); labSample(); drawBotsQuick(); render(app.state()); requestAnimationFrame(step); } step(); });
+    prog.done(lab.abort?'⨯ aborted at '+done:'cascade settled'); labReport(); running=wasRunning; lab.busy=false; setInduce(false);
+  }
+  function labReport(){ const now=curScale(), b=lab.baseline||now, sg=(x)=>((x>0?'+':'')+x.toFixed(2)), scope=lab.scope==='bot'?`${lab.bot} alone`:'the whole town';
+    $("labReportWrap").style.display='block'; $("labReport").innerHTML=`<b style="color:#e2607a">${lab.spec}</b> on <b>${scope}</b><br><span class="rk">avg mood</span> ${b.avgV} → <b>${now.avgV}</b> (${sg(now.avgV-b.avgV)}) · <span class="rk">arousal</span> ${b.avgA} → <b>${now.avgA}</b> (${sg(now.avgA-b.avgA)})<br><span class="rk">job productivity</span> ${b.avgP} → <b>${now.avgP}</b> (${sg(now.avgP-b.avgP)}) · <span class="rk">avg wealth</span> $${b.avgW} → <b>$${now.avgW}</b> (${(now.avgW-b.avgW>=0?'+':'')}${now.avgW-b.avgW})<br><span class="rk">bots gone low</span> ${b.neg} → <b>${now.neg}</b>/${app.colony.agents.length} · <span class="rk">tribes</span> ${b.tribes} → <b>${now.tribes}</b><br><span style="color:var(--dim);font-size:11px">productivity tracks mood instantly; wealth is the LAGGED downstream. ↺ Heal to recover.</span>`;
+    labHistAdd({ spec:lab.spec, scope:lab.scope==='bot'?lab.bot:'town', v:[b.avgV,now.avgV], a:[b.avgA,now.avgA], p:[b.avgP,now.avgP], w:[b.avgW,now.avgW], low:[b.neg,now.neg], tri:[b.tribes,now.tribes] });
+  }
+  function labHistAdd(h){ lab.hist.unshift(h); const el=$("labHist"); if(lab.hist.length===1) el.innerHTML=''; const dvc=(h.v[1]<h.v[0])?'dl':(h.v[1]>h.v[0])?'up':''; const div=document.createElement('div'); div.className='h'; div.innerHTML=`<b>${h.spec}</b> <span style="opacity:.7">${h.scope}</span> · mood <span class="${dvc}">${h.v[0]}→${h.v[1]}</span> · prod ${h.p[0]}→${h.p[1]} · wealth $${h.w[0]}→$${h.w[1]} · low ${h.low[0]}→${h.low[1]} · tribes ${h.tri[0]}→${h.tri[1]}`; el.insertBefore(div, el.firstChild); }
+  function labHeal(){ for(const a of app.colony.agents) if(a.mind&&a.mind.heal) a.mind.heal(); labSample(); line("system","🧪 lab: every lesioned channel restored — homeostasis recovers the levels","amends"); }
+  function labSyncUI(){ document.querySelectorAll('#labPanel .chrow').forEach(row=>{ const c=row.dataset.ch, arm=row.querySelector('.arm'), tgt=row.querySelector('.tgt'), out=row.querySelector('output'); const on=!!lab.armed[c]; arm.checked=on; tgt.value=lab.targets[c]; out.textContent=(+lab.targets[c]).toFixed(2); row.classList.toggle('on',on); row.querySelector('label').classList.toggle('armed',on); }); }
+  const LAB_PRESETS={ dopa:{dopamine:0.02}, sero:{serotonin:0.1}, ne:{norepinephrine:0.8}, ach:{acetylcholine:0.9}, comorbid:{serotonin:0.1,norepinephrine:0.8}, reset:null };
+  document.querySelectorAll('#labPanel .chrow').forEach(row=>{ const c=row.dataset.ch, arm=row.querySelector('.arm'), tgt=row.querySelector('.tgt'), out=row.querySelector('output');
+    arm.onchange=()=>{ lab.armed[c]=arm.checked; row.classList.toggle('on',arm.checked); row.querySelector('label').classList.toggle('armed',arm.checked); };
+    tgt.oninput=()=>{ lab.targets[c]=+tgt.value; out.textContent=(+tgt.value).toFixed(2); if(!arm.checked){ arm.checked=true; arm.onchange(); } }; });
+  document.querySelectorAll('#labPanel .presets button').forEach(btn=>btn.onclick=()=>{ const p=LAB_PRESETS[btn.dataset.preset]; for(const c in LAB_HEALTHY){ lab.armed[c]=false; lab.targets[c]=LAB_HEALTHY[c]; } if(p){ for(const c in p){ lab.armed[c]=true; lab.targets[c]=p[c]; } } labSyncUI(); if(btn.dataset.preset!=='reset') labRun(); });
+  $("labScope").onchange=e=>lab.scope=e.target.value;
+  $("labBot").onchange=e=>{ lab.bot=e.target.value; for(const k in lab.series) lab.series[k]=[]; labSample(); };
+  $("btnInduce").onclick=()=>{ if(lab.busy) lab.abort=true; else labRun(); }; $("btnHeal").onclick=labHeal;
+  $("labClearHist").onclick=()=>{ lab.hist=[]; $("labHist").innerHTML='<div style="color:var(--dim);font-size:11px">cleared</div>'; };
+  $("btnLab").onclick=()=>{ const show=!$("labPanel").classList.contains('show'); $("labPanel").classList.toggle('show',show); $("btnLab").classList.toggle('on',show); if(show){ labFillBots(); labSyncUI(); labSample(); } };
+  $("labClose").onclick=()=>{ $("labPanel").classList.remove('show'); $("btnLab").classList.remove('on'); };
+  $("labCopy").onclick=()=>{ try{ navigator.clipboard.writeText($("labReport").textContent); }catch(e){} };
+
+  window.__colony = { get app(){return app;}, state:()=>app.state() };
+</script>
+</body></html>

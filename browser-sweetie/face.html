@@ -1,0 +1,160 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Sweetie — face</title>
+<style>
+  :root{ --bg:#0b0d12; --panel:#12151d; --line:#232838; --ink:#e6e9f0; --dim:#8891a6; --ok:#63d29b; --warn:#e8b04b; --err:#e2607a; --info:#6ea8ff; }
+  *{ box-sizing:border-box; } body{ margin:0; background:var(--bg); color:var(--ink); font:14px/1.5 ui-sans-serif,system-ui,Segoe UI,Roboto,sans-serif; height:100vh; display:flex; flex-direction:column; }
+  header{ display:flex; gap:12px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  header b{ color:var(--ok); } .m{ color:var(--dim); font-size:12px; } .m span{ color:var(--ink); font-weight:600; }
+  button,select{ background:#1b1f2b; color:var(--ink); border:1px solid var(--line); border-radius:8px; padding:7px 11px; font:inherit; font-size:13px; cursor:pointer; }
+  button.on{ background:#243b52; color:var(--info); border-color:var(--info); }
+  main{ flex:1; display:grid; grid-template-columns:1fr 260px; min-height:0; }
+  .stage{ position:relative; display:flex; align-items:center; justify-content:center; }
+  svg#face{ width:min(80vh,90%); height:auto; }
+  .side{ border-left:1px solid var(--line); padding:12px; display:flex; flex-direction:column; gap:10px; overflow:auto; }
+  .cam{ width:100%; border-radius:8px; border:1px solid var(--line); background:#000; aspect-ratio:4/3; object-fit:cover; }
+  .bubble{ min-height:44px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:9px 11px; font-style:italic; color:var(--ok); }
+  .stat{ font-size:12px; color:var(--dim); } .stat b{ color:var(--ink); }
+  .bars{ display:flex; gap:4px; height:7px; margin-top:3px; } .bars .b{ flex:1; background:#1b1f2b; border-radius:3px; overflow:hidden; } .bars .b>i{ display:block; height:100%; }
+</style></head>
+<body>
+<header>
+  <b>🐾 SWEETIE</b> <span class="m">webcam face</span>
+  <button id="src">▶ demo (mock cam)</button>
+  <button id="mouth">🔊 voice: off</button>
+  <select id="mouthKind" title="voice source"><option value="tts">voice: browser TTS</option><option value="ollama">voice+words: ollama</option></select>
+  <button id="listen" title="speech-to-text">🎤 listen</button>
+  <span class="m" style="margin-left:auto">sees you: <span id="present">—</span> · arc <span id="arc">—</span></span>
+</header>
+<main>
+  <div class="stage"><svg id="face" viewBox="0 0 400 340">
+    <ellipse cx="200" cy="180" rx="150" ry="140" fill="#12151d" stroke="#232838" stroke-width="3"/>
+    <g id="browL"><rect x="112" y="96" width="60" height="10" rx="5" fill="#2b3242"/></g>
+    <g id="browR"><rect x="228" y="96" width="60" height="10" rx="5" fill="#2b3242"/></g>
+    <circle cx="142" cy="150" r="34" fill="#0b0d12" stroke="#2b3242" stroke-width="2"/><circle id="pupL" cx="142" cy="150" r="15" fill="#e6e9f0"/>
+    <circle cx="258" cy="150" r="34" fill="#0b0d12" stroke="#2b3242" stroke-width="2"/><circle id="pupR" cx="258" cy="150" r="15" fill="#e6e9f0"/>
+    <path id="mouth" d="M160 240 Q200 260 240 240" fill="none" stroke="#e6e9f0" stroke-width="6" stroke-linecap="round"/>
+    <ellipse id="glow" cx="200" cy="180" rx="150" ry="140" fill="none" stroke="var(--ok)" stroke-width="0" opacity="0.5"/>
+  </svg></div>
+  <div class="side">
+    <video id="cam" class="cam" autoplay playsinline muted></video>
+    <canvas id="det" width="96" height="72" style="display:none"></canvas>
+    <div class="bubble" id="bubble">…</div>
+    <div class="stat">drive<div class="bars" id="bars"></div></div>
+    <div class="stat" id="dbg">idle</div>
+    <div class="stat" style="color:#4a5266">Grant camera to let her watch the room, or run the demo. Onboard reflexes need no LLM; turn on voice to hear her.</div>
+  </div>
+</main>
+<script type="module">
+  import { makeMotionEyes, senseFromMotion } from "./src/vision/motion.js";
+  import { facesToVisible, emotionToAffect } from "./src/vision/faces.js";
+  import { makeEars } from "./src/audio/ears.js";
+  import { makeDecider } from "./src/decider.js";
+  import { makeSoul } from "./src/face/soul.js";
+  import { makePsyche } from "./src/agents/psyche.js";
+  import { makeMemoryGate } from "./src/memoryGate.js";
+  import { makeDeclarativeStore } from "../../brain/src/declarativeStore.js";
+  import { makeIndexedDbStorage } from "../../brain/src/storage.js";
+  import { makeHashEmbedder } from "../../brain/src/embedder.js";
+  const $=(id)=>document.getElementById(id);
+  const eyes = makeMotionEyes({ fovDeg:60, mirror:true });
+  // sharper senses (optional, additive — motion stays the default):
+  const ears = makeEars(); let analyser = null, audioBuf = null;
+  // FACES UPGRADE: to give her real eyes, load face-api.js (CDN) and set faceDetect = async (videoEl) =>
+  //   ({ faces:[{cx,cy,w,h}]/*normalised*/, expressions:{happy,sad,angry,…} }). The loop below runs it through
+  //   facesToVisible()/emotionToAffect() automatically. Left null so the tested motion path is the default.
+  let faceDetect = null;
+  function readRms(){ if(!analyser) return 0; analyser.getByteTimeDomainData(audioBuf); let s=0; for(let i=0;i<audioBuf.length;i++){ const v=(audioBuf[i]-128)/128; s+=v*v; } return Math.sqrt(s/audioBuf.length); }
+  // her ENDURING self: one psyche + persistent memory + the soul that wraps the decider
+  const psyche = makePsyche({ seed: 42 });
+  let decider = makeDecider({ backend:null }), memory = null, soul = null;
+  const store = makeDeclarativeStore({ storage: makeIndexedDbStorage("sweetie-face","kv"), embedder: makeHashEmbedder({dim:128}), now:()=>performance.now()/1000, id:()=>"m"+Date.now().toString(36)+Math.random().toString(36).slice(2,6), key:"memories" });
+  const soulStore = makeIndexedDbStorage("sweetie-face-soul","kv");
+  (async()=>{ await store.load(); memory = makeMemoryGate({ store }); soul = makeSoul({ decider, psyche, memory });
+    try{ const snap = await soulStore.get("soul"); if(snap){ soul.restore(snap); $("bubble").textContent="…I remember you."; } }catch(e){} })();
+  setInterval(async()=>{ if(soul) try{ await soulStore.set("soul", soul.snapshot()); }catch(e){} }, 15000);
+
+  // ---- optional ollama mouth (for spoken words on RESPOND) ----
+  function ollamaBackend(){ return { name:"ollama", async generate({system,messages,options}){ const b={model:"gemma4:latest",stream:false,messages:[...(system?[{role:"system",content:system}]:[]),...(messages||[])],options:{num_predict:48,temperature:0.8}}; const r=await fetch("http://localhost:11434/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)}); if(!r.ok)throw new Error("ollama "+r.status); const d=await r.json(); return (d.message&&d.message.content)||""; } }; }
+
+  // ---- render the face: gaze toward a bearing, mood from the drive ----
+  const cam=$("cam"), det=$("det"), ctx=det.getContext("2d",{willReadFrequently:true});
+  let gaze=0, gazeT=0;
+  function renderFace(r){
+    const present=r.present, bearing=r.bearing||0, dr=r.drive||{}, mood=r.mood||{valence:0,arousal:0};
+    const b = present ? Math.max(-1,Math.min(1, bearing/30)) : 0; gazeT = b;          // target gaze −1..1
+    gaze += (gazeT-gaze)*0.25;                                                         // smooth
+    const dx = gaze*14, dy = present?2:0;
+    $("pupL").setAttribute("cx",142+dx); $("pupL").setAttribute("cy",150+dy);
+    $("pupR").setAttribute("cx",258+dx); $("pupR").setAttribute("cy",150+dy);
+    const threat=dr.threat||0, reward=dr.reward||0;
+    // baseline expression from her PERSISTENT MOOD; immediate drive/arc override it in the moment
+    let mouthPath = mood.valence>0.25 ? "M158 238 Q200 262 242 238" : mood.valence<-0.15 ? "M162 250 Q200 240 238 250" : "M160 240 Q200 252 240 240";
+    let brow = mood.valence<-0.15?92:96, col = mood.valence>0.25?"var(--ok)":mood.valence<-0.15?"var(--info)":"var(--dim)", gw = Math.abs(mood.valence)>0.25?2:0;
+    if(r.arc==="EMERGENCY"){ mouthPath="M165 250 Q200 232 235 250"; brow=88; col="var(--err)"; gw=6; $("pupL").setAttribute("r",19); $("pupR").setAttribute("r",19); }
+    else { $("pupL").setAttribute("r",15); $("pupR").setAttribute("r",15);
+      if(reward>0.35){ mouthPath="M155 236 Q200 272 245 236"; col="var(--ok)"; gw=3; }          // happy to see you
+      else if(threat>0.4){ mouthPath="M165 246 Q200 236 235 246"; brow=90; col="var(--warn)"; gw=3; } // wary
+    }
+    $("mouth").setAttribute("d",mouthPath); $("browL").setAttribute("transform",`translate(0,${brow-96})`); $("browR").setAttribute("transform",`translate(0,${brow-96})`);
+    $("glow").setAttribute("stroke",col); $("glow").setAttribute("stroke-width",gw);
+    $("bars").innerHTML=[["threat",threat,"var(--err)"],["reward",reward,"var(--ok)"],["sensory",dr.sensory||0,"var(--info)"]].map(([n,v,c])=>`<div class="b" title="${n} ${(v||0).toFixed(2)}"><i style="width:${Math.round((v||0)*100)}%;background:${c}"></i></div>`).join("");
+  }
+
+  // ---- voice ----
+  let mouthOn=false, lastSpoke="", speakAt=0;
+  function say(text){ if(!mouthOn||!text) return; $("bubble").textContent=text; const now=performance.now(); if(text===lastSpoke||now-speakAt<2500) return; lastSpoke=text; speakAt=now; try{ const u=new SpeechSynthesisUtterance(text.replace(/[*]/g,"")); u.rate=1.05; u.pitch=1.3; speechSynthesis.cancel(); speechSynthesis.speak(u); }catch(e){} }
+
+  // ---- the loop: grab a frame → motion → sense → decide → render ----
+  let mode="off", mockT=0, deciding=false, pendingPrompt=null;
+  function grabInto(){
+    if(mode==="mock"){ ctx.fillStyle="#000"; ctx.fillRect(0,0,96,72); mockT+=0.06; const x=48+38*Math.sin(mockT); ctx.fillStyle="#cfe"; ctx.fillRect(x-7,26,14,26); return true; }
+    if(mode==="cam" && cam.videoWidth){ ctx.drawImage(cam,0,0,96,72); return true; }
+    return false;
+  }
+  async function tick(){
+    if(mode!=="off" && grabInto() && !deciding && soul){
+      deciding=true;
+      const det2 = eyes.observe(ctx.getImageData(0,0,96,72));
+      const s = senseFromMotion(det2);
+      let visible = s.visible, events = s.events, yourAffect = null;
+      if(faceDetect && mode==="cam"){ try{ const fd = await faceDetect(cam); if(fd && fd.faces && fd.faces.length){ visible = facesToVisible(fd.faces,{fovDeg:60}); if(fd.expressions) yourAffect = emotionToAffect(fd.expressions); } }catch(e){} }
+      if(analyser){ try{ events = events.concat(ears.hear(readRms())); }catch(e){} }
+      const frame = { pose:{x:0,y:0,yaw:0}, ranges:[3,3,3,3], battery:100, safety:"active", mode:"standing", visible, events };
+      try{
+        let r;
+        if(pendingPrompt){ const p=pendingPrompt; pendingPrompt=null; const c=await soul.converse(p, frame); r={ arc:"RESPOND", drive:{}, mood:soul.mood(), line:c.speech, present:det2.present, bearing:det2.bearingDeg||0 }; }
+        else { r = await soul.tick(frame, { ...det2, yourAffect }); }
+        renderFace(r);
+        const st = soul.state();
+        $("present").textContent = det2.present?`yes (${det2.bearingDeg}°)`:"no"; $("arc").textContent=r.arc;
+        if(r.line) say(r.line); else if(!mouthOn) $("bubble").textContent=det2.present?"*watching*":"…";
+        $("dbg").textContent=`arc ${r.arc} · feels-you ${st.feelAboutYou} · mood v${r.mood.valence} a${r.mood.arousal}`;
+      }catch(e){ $("dbg").textContent="err: "+e.message; }
+      deciding=false;
+    } else { renderFace({ present:false, drive:{}, mood:soul?soul.mood():{valence:0,arousal:0} }); }
+    setTimeout(tick,100);   // ~10fps
+  }
+  tick();
+
+  // ---- controls ----
+  $("src").onclick=async()=>{
+    if(mode==="cam"||mode==="mock"){ mode="off"; $("src").textContent="▶ demo (mock cam)"; $("src").classList.remove("on"); if(cam.srcObject){cam.srcObject.getTracks().forEach(t=>t.stop()); cam.srcObject=null;} return; }
+    // try real camera; fall back to mock
+    try{
+      let stream; try{ stream = await navigator.mediaDevices.getUserMedia({video:{width:640,height:480},audio:true}); }catch(e){ stream = await navigator.mediaDevices.getUserMedia({video:{width:640,height:480}}); }
+      cam.srcObject = stream; mode="cam"; $("src").textContent="📷 camera (stop)";
+      if(stream.getAudioTracks().length){ try{ const ac=new (window.AudioContext||window.webkitAudioContext)(); const src=ac.createMediaStreamSource(stream); analyser=ac.createAnalyser(); analyser.fftSize=256; audioBuf=new Uint8Array(analyser.fftSize); src.connect(analyser); }catch(e){ analyser=null; } }
+    }
+    catch(e){ mode="mock"; $("src").textContent="▶ demo running (no cam)"; }
+    eyes.reset(); $("src").classList.add("on");
+  };
+  $("mouth").onclick=()=>{ mouthOn=!mouthOn; $("mouth").textContent=mouthOn?"🔊 voice: on":"🔊 voice: off"; $("mouth").classList.toggle("on",mouthOn);
+    decider = makeDecider({ backend: (mouthOn && $("mouthKind").value==="ollama") ? ollamaBackend() : null }); if(soul) soul = makeSoul({ decider, psyche, memory }); };
+  $("mouthKind").onchange=()=>{ if(mouthOn) $("mouth").onclick(), $("mouth").onclick(); };
+  // ears: speech-to-text → a prompt she responds to
+  const SR = window.SpeechRecognition||window.webkitSpeechRecognition;
+  $("listen").onclick=()=>{ if(!SR){ $("dbg").textContent="no speech recognition in this browser"; return; } const r=new SR(); r.lang="en-US"; r.onresult=(e)=>{ pendingPrompt=e.results[0][0].transcript; $("bubble").textContent="you: "+pendingPrompt; }; r.start(); $("listen").textContent="🎤 listening…"; r.onend=()=>$("listen").textContent="🎤 listen"; };
+
+  window.__face = { get mode(){return mode;}, eyes, tickPresent:()=>$("present").textContent };
+</script>
+</body></html>

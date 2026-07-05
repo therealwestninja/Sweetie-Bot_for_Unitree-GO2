@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Browser Sweetie — W1</title>
+<style>
+  :root { --bg:#0c0d10; --panel:#14161c; --line:#232732; --ink:#c8cee0; --dim:#838aa0; --accent:#f0a020;
+          --ok:#3ecf8e; --warn:#f0a020; --err:#e0556b; --info:#5aa9e6; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:13px/1.5 "IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace; }
+  header { display:flex; align-items:center; gap:14px; padding:10px 16px; border-bottom:1px solid var(--line); }
+  header .logo { color:var(--accent); font-weight:700; letter-spacing:.5px; }
+  .stats { display:flex; gap:14px; flex-wrap:wrap; margin-left:auto; }
+  .stat { display:flex; gap:6px; align-items:baseline; }
+  .stat .k { color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.5px; }
+  .stat .v { font-weight:600; } .v.ok{color:var(--ok)} .v.warn{color:var(--warn)} .v.err{color:var(--err)} .v.info{color:var(--info)}
+  .goal { padding:8px 16px; background:linear-gradient(90deg,rgba(240,160,32,.12),transparent); border-bottom:1px solid var(--line); }
+  .goal .k { color:var(--accent); text-transform:uppercase; font-size:11px; letter-spacing:.5px; margin-right:8px; }
+  .goal.empty .v { color:var(--dim); font-style:italic; }
+  main { display:grid; grid-template-columns:1fr 320px; gap:14px; padding:14px 16px; align-items:start; }
+  @media (max-width:820px){ main{ grid-template-columns:1fr; } }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; }
+  svg#map { width:100%; aspect-ratio:16/9; background:#0a0b0e; border-radius:6px; display:block; }
+  .grid line { stroke:var(--line); stroke-width:.02; } .grid circle { stroke:var(--line); stroke-width:.015; fill:none; stroke-dasharray:.1 .1; }
+  .obj circle { stroke-width:.03; } .obj text { fill:var(--dim); font-size:.28px; text-anchor:middle; }
+  .obj.cat-furniture circle{ fill:#2b3450; stroke:#4a5878 } .obj.cat-fixture circle{ fill:#3a3550; stroke:#6a5c88 }
+  .obj.cat-animal circle{ fill:none; stroke:#5aa9e6; stroke-width:.05 } .obj.cat-person circle{ fill:none; stroke:#3ecf8e; stroke-width:.05 }
+  .obj.cat-vehicle circle{ fill:#4a3f2a; stroke:#8a7648 } .obj.cat-barrier circle,.obj.cat-infrastructure circle{ fill:#2a2d34; stroke:#4a4f5c }
+  .obj.cat-cone circle{ fill:#7a4a10; stroke:#f0a020 } .obj.passable circle{ fill:none; stroke:#2e6b45; stroke-dasharray:.08 .08 }
+  .obj.is-target circle{ stroke:var(--accent)!important; stroke-width:.07 }
+  #robot .body{ fill:rgba(240,160,32,.15); stroke:var(--accent); stroke-width:.05 }
+  #robot .fov{ fill:rgba(90,169,230,.08); stroke:none } #robot .tri{ fill:var(--accent) }
+  #robot.is-estop .body{ stroke:var(--err); fill:rgba(224,85,107,.15) } #robot.is-estop .tri{ fill:var(--err) }
+  #robot.is-down .body{ stroke:var(--dim); fill:rgba(131,138,160,.1) } #robot.is-down .tri{ fill:var(--dim) }
+  .ctl { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; align-items:center; }
+  button { background:#1b1e26; color:var(--ink); border:1px solid var(--line); border-radius:6px; padding:7px 12px; cursor:pointer; font:inherit; }
+  button:hover{ border-color:var(--accent); } button.armed{ background:var(--accent); color:#0c0d10; border-color:var(--accent); }
+  button.estop{ background:#3a1620; color:var(--err); border-color:var(--err); font-weight:700; }
+  .joy { width:150px; height:150px; border-radius:50%; border:1px solid var(--line); position:relative; margin:8px auto; background:radial-gradient(circle,#111319,#0a0b0e); touch-action:none; }
+  .joy .knob{ width:44px; height:44px; border-radius:50%; background:var(--accent); position:absolute; left:53px; top:53px; box-shadow:0 0 12px rgba(240,160,32,.4); }
+  .joy.disarmed .knob{ background:#33373f; box-shadow:none; }
+  .joy-read{ text-align:center; color:var(--dim); font-size:11px; }
+  .stream{ height:260px; overflow-y:auto; display:flex; flex-direction:column; gap:3px; font-size:12px; }
+  .stream .idle{ color:var(--dim); font-style:italic; padding:10px 2px; }
+  .stream .ln{ display:flex; gap:6px; } .stream .tag{ color:var(--dim); min-width:64px; }
+  .stream .ev{ color:var(--info); } .stream .assist{ color:var(--warn); }
+  h3{ margin:0 0 8px; font-size:12px; color:var(--dim); text-transform:uppercase; letter-spacing:.5px; }
+  select,input{ background:#1b1e26; color:var(--ink); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font:inherit; font-size:12px; }
+  button.brainon{ background:#243b52; color:var(--info); border-color:var(--info); }
+  #mindState{ font-size:11px; text-transform:none; letter-spacing:0; } #mindState.mind-off{ color:var(--dim); } #mindState.mind-on{ color:var(--info); }
+  .mindbar{ background:#0e1016; border:1px solid var(--line); border-radius:6px; padding:8px; font-size:12px; }
+  .mrow{ display:flex; gap:6px; align-items:baseline; flex-wrap:wrap; } .mrow .k{ color:var(--dim); font-size:10px; text-transform:uppercase; } .mrow .v{ font-weight:600; margin-right:8px; }
+  .drive{ display:flex; gap:4px; margin-top:6px; height:8px; }
+  .drive .bar{ flex:1; border-radius:3px; background:#1b1e26; overflow:hidden; position:relative; } .drive .bar>i{ position:absolute; left:0; top:0; bottom:0; }
+  .stream .voice{ color:var(--accent); font-style:italic; } .stream .emergency{ color:var(--err); font-weight:600; }
+  .stream .think{ color:var(--dim); } .stream .you{ color:var(--ink); } .stream .motor{ color:var(--ok); }
+  .chatrow{ display:flex; gap:6px; margin-top:8px; } .chatrow input{ flex:1; }
+  .badge{ background:var(--warn); color:#000; border-radius:10px; padding:0 7px; font-size:11px; font-weight:700; } .badge.zero{ background:#2a2e38; color:var(--dim); }
+  .tray{ margin-top:8px; display:flex; flex-direction:column; gap:6px; } .tray .idle{ color:var(--dim); font-size:12px; font-style:italic; }
+  .pend{ display:flex; align-items:center; gap:8px; background:#231d10; border:1px solid #4a3c18; border-radius:6px; padding:7px 9px; font-size:13px; }
+  .pend .t{ flex:1; } .pend button{ padding:3px 8px; font-size:12px; } .pend .ok{ background:#1c3a24; color:var(--ok); border-color:var(--ok); } .pend .no{ background:#3a1c1c; color:var(--err); border-color:var(--err); }
+  .known{ margin-top:8px; display:flex; flex-direction:column; gap:4px; } .known .f{ font-size:12px; color:var(--dim); padding:4px 8px; border-left:2px solid var(--ok); background:#0e1016; } .known .f b{ color:var(--ok); font-weight:600; }
+</style>
+</head>
+<body>
+  <header>
+    <span class="logo">◢◤ SWEETIE</span>
+    <span style="color:var(--dim)">browser sim · W1</span>
+    <div class="stats" id="stats"></div>
+  </header>
+  <div class="goal empty" id="goal"><span class="k">goal</span><span class="v">— idle —</span></div>
+  <main>
+    <div class="card">
+      <svg id="map" viewBox="-7 -7 14 14" preserveAspectRatio="xMidYMid meet">
+        <g class="grid" id="grid"></g>
+        <g id="objects"></g>
+        <g id="robot"><polygon class="fov" points="0,0 0,0 0,0"/><circle class="body" r="0.3"/><polygon class="tri" points="0.34,0 -0.18,0.16 -0.18,-0.16"/></g>
+      </svg>
+      <div class="ctl">
+        <button id="btnArm">arm</button>
+        <button id="btnStand">stand</button>
+        <button id="btnSit">sit</button>
+        <button class="estop" id="btnEstop">⬛ E-STOP</button>
+        <button id="btnClear">clear</button>
+        <button id="btnBrain">🧠 brain: off</button>
+        <button id="btnAuto" title="autonomy driver: left alone she initiates">💤 autonomy: off</button>
+        <select id="mouth" title="offboard mouth for RESPOND/ESCALATE"><option value="none">mouth: none (onboard-only)</option><option value="ollama">mouth: ollama</option></select>
+        <input id="model" value="gemma3:4b" style="width:92px" title="ollama model" />
+        <span style="color:var(--dim);font-size:11px">spacebar = E-STOP</span>
+      </div>
+    </div>
+    <div class="card">
+      <h3>drive</h3>
+      <div class="joy disarmed" id="joy"><div class="knob" id="knob"></div></div>
+      <div class="joy-read" id="joyRead">vx 0.00 · vyaw 0.00</div>
+      <h3 style="margin-top:16px">mind <span id="mindState" class="mind-off">— dormant —</span></h3>
+      <div class="mindbar" id="mindbar"><div class="mrow"><span class="k">arc</span><span class="v" id="mArc">—</span><span class="k">conf</span><span class="v" id="mConf">—</span><span class="k">focus</span><span class="v" id="mTarget">—</span></div><div class="drive" id="mDrive"></div></div>
+      <h3 style="margin-top:14px">perception &amp; voice</h3>
+      <div class="stream" id="stream"><div class="idle">Events appear here as she senses the world — a churn while she moves, quiet when she rests. Turn on the brain and she'll react.</div></div>
+      <div class="chatrow"><input id="chat" placeholder="say something to her… (needs a mouth)" /><button id="btnSay">say</button></div>
+      <h3 style="margin-top:16px">memory <span id="pendCount" class="badge">0</span></h3>
+      <div class="chatrow"><input id="factIn" placeholder="teach her a fact → lands in her tray" /><button id="btnTeach">+ propose</button></div>
+      <div class="tray" id="tray"><div class="idle">Facts she proposes (or you teach her) wait here for approval. Approved facts persist and ground her replies.</div></div>
+      <div class="known" id="known"></div>
+    </div>
+  </main>
+
+<script type="module">
+  import { makeSim } from "./src/simLoop.js";
+  import { makeCognition } from "./src/cognition.js";
+  import { makeMemoryGate } from "./src/memoryGate.js";
+  import { makeIdleDriver } from "./src/idleDriver.js";
+  import { makeDeclarativeStore } from "../../brain/src/declarativeStore.js";
+  import { makeIndexedDbStorage } from "../../brain/src/storage.js";
+  import { makeHashEmbedder } from "../../brain/src/embedder.js";
+
+  const sim = makeSim({ scene: "apartment", now: () => performance.now() / 1000 });
+  const $ = (id) => document.getElementById(id);
+
+  // --- static grid + world objects (drawn once) ---
+  const gridEl = $("grid");
+  for (let i = -8; i <= 8; i += 2) { for (const [a,b,c,d] of [[i,-9,i,9],[-9,i,9,i]]) { const l=document.createElementNS("http://www.w3.org/2000/svg","line"); l.setAttribute("x1",a);l.setAttribute("y1",-b);l.setAttribute("x2",c);l.setAttribute("y2",-d); gridEl.appendChild(l);} }
+  for (const r of [2,4,6,8]) { const c=document.createElementNS("http://www.w3.org/2000/svg","circle"); c.setAttribute("r",r); gridEl.appendChild(c); }
+  const objsEl = $("objects");
+  for (const o of sim.worldPayload().objects) {
+    const g=document.createElementNS("http://www.w3.org/2000/svg","g");
+    g.setAttribute("class",`obj cat-${o.category}${o.obstacle?"":" passable"}${o.dynamic?" is-dynamic":""}`);
+    g.setAttribute("transform",`translate(${o.x},${-o.y})`); g.dataset.name=o.name;
+    const c=document.createElementNS("http://www.w3.org/2000/svg","circle"); c.setAttribute("r",Math.max(o.radius,0.1)); g.appendChild(c);
+    if (["furniture","animal","person","fixture","vehicle"].includes(o.category)||o.dynamic){ const t=document.createElementNS("http://www.w3.org/2000/svg","text"); t.setAttribute("y",-(Math.max(o.radius,0.1)+0.15)); t.textContent=o.name.replace(/^the /,""); g.appendChild(t);}
+    objsEl.appendChild(g);
+  }
+
+  // --- render a telemetry frame ---
+  const robotEl=$("robot"), fovEl=robotEl.querySelector(".fov");
+  const HALF=35*Math.PI/180, RNG=8;
+  function render(f){
+    const p=f.state.pose;
+    robotEl.setAttribute("transform",`translate(${p.x},${-p.y}) rotate(${-p.yaw*180/Math.PI})`);
+    robotEl.setAttribute("class", f.state.mode==="estop"?"is-estop":f.state.mode==="down"?"is-down":"");
+    // FOV wedge in robot frame (points along +x, i.e. heading)
+    fovEl.setAttribute("points",`0,0 ${RNG*Math.cos(HALF)},${-RNG*Math.sin(HALF)} ${RNG*Math.cos(-HALF)},${-RNG*Math.sin(-HALF)}`);
+    for (const o of f.dynamic_objects){ const g=objsEl.querySelector(`[data-name="${CSS.escape(o.name)}"]`); if(g) g.setAttribute("transform",`translate(${o.x},${-o.y})`); }
+    // stats
+    const s=f.safety.state, m=f.state.mode, b=f.state.battery_percent;
+    $("stats").innerHTML = stat("safety",s,s==="active"?"ok":s==="estop"?"err":"warn")+stat("mode",m,m==="moving"?"info":"")+stat("batt",b.toFixed(1)+"%",b<20?"err":b<50?"warn":"ok")+stat("region",f.current_region||"—")+stat("pose",`${p.x.toFixed(1)},${p.y.toFixed(1)}`);
+  }
+  const stat=(k,v,cls="")=>`<span class="stat"><span class="k">${k}</span><span class="v ${cls}">${v}</span></span>`;
+
+  // --- perception stream ---
+  const streamEl=$("stream"); let streamCleared=false;
+  sim.bus.subscribe("perception",(p)=>pushLine("sense",p.event,"ev"));
+  sim.bus.subscribe("assist",(p)=>p.events.forEach(e=>pushLine("assist",e,"assist")));
+  sim.bus.subscribe("zone_changed",(z)=>{ if(z.to) pushLine("region","entered "+z.to,"ev"); });
+  function pushLine(tag,text,cls){ if(!streamCleared){ streamEl.innerHTML=""; streamCleared=true; } const d=document.createElement("div"); d.className="ln"; d.innerHTML=`<span class="tag">${tag}</span><span class="${cls}">${text}</span>`; streamEl.appendChild(d); while(streamEl.children.length>120) streamEl.removeChild(streamEl.firstChild); streamEl.scrollTop=streamEl.scrollHeight; }
+
+  // --- controls ---
+  let armed=false;
+  $("btnArm").onclick=()=>{ if(armed){ sim.command({type:"disarm"}); armed=false; } else { sim.command({type:"arm"}); sim.command({type:"heartbeat"}); armed=true; } $("btnArm").classList.toggle("armed",armed); $("btnArm").textContent=armed?"✓ armed":"arm"; $("joy").classList.toggle("disarmed",!armed); };
+  $("btnStand").onclick=()=>sim.command({type:"stand_up"});
+  $("btnSit").onclick=()=>sim.command({type:"stand_down"});
+  $("btnEstop").onclick=()=>{ sim.command({type:"estop"}); armed=false; $("btnArm").classList.remove("armed"); $("btnArm").textContent="arm"; $("joy").classList.add("disarmed"); };
+  $("btnClear").onclick=()=>sim.command({type:"clear_estop"});
+  addEventListener("keydown",(e)=>{ if(e.code==="Space" && e.target.tagName!=="INPUT"){ e.preventDefault(); $("btnEstop").onclick(); } });
+
+  // --- joystick: vertical=vx (±1.0), horizontal=vyaw (±1.5) ---
+  const joy=$("joy"), knob=$("knob"); let cmd={vx:0,vyaw:0}, dragging=false;
+  const R=53;
+  function setKnob(dx,dy){ const d=Math.hypot(dx,dy); if(d>R){ dx*=R/d; dy*=R/d; } knob.style.left=(53+dx)+"px"; knob.style.top=(53+dy)+"px"; cmd.vx=-(dy/R)*1.0; cmd.vyaw=-(dx/R)*1.5; $("joyRead").textContent=`vx ${cmd.vx.toFixed(2)} · vyaw ${cmd.vyaw.toFixed(2)}`; }
+  function endJoy(){ dragging=false; setKnob(0,0); cmd={vx:0,vyaw:0}; sim.command({type:"move",vx:0,vy:0,vyaw:0}); }
+  joy.addEventListener("pointerdown",(e)=>{ dragging=true; joy.setPointerCapture(e.pointerId); });
+  joy.addEventListener("pointermove",(e)=>{ if(!dragging) return; const r=joy.getBoundingClientRect(); setKnob(e.clientX-r.left-75, e.clientY-r.top-75); });
+  joy.addEventListener("pointerup",endJoy); joy.addEventListener("pointercancel",endJoy);
+
+  // --- memory (approval gate): persists across sessions via IndexedDB ---
+  const esc = (s) => String(s).replace(/[&<>]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;" }[c]));
+  let memory = null;
+  (async () => {
+    // genId MUST be collision-resistant across sessions: the store's default counter resets to 0 on reload,
+    // so a fact added after reload would reuse a persisted id ("m0") and update() would hit the wrong record.
+    const genId = () => "m" + Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+    const store = makeDeclarativeStore({ storage: makeIndexedDbStorage("sweetie-memory","kv"), embedder: makeHashEmbedder({ dim:128 }), now: () => performance.now()/1000, id: genId, key: "memories" });
+    await store.load(); memory = makeMemoryGate({ store }); renderMemory();
+  })();
+  function renderMemory(){
+    if(!memory) return;
+    const pend = memory.pending(), known = memory.facts();
+    const pc = $("pendCount"); pc.textContent = pend.length; pc.classList.toggle("zero", pend.length===0);
+    const tray = $("tray");
+    if(pend.length===0){ tray.innerHTML = '<div class="idle">Facts she proposes (or you teach her) wait here for approval. Approved facts persist and ground her replies.</div>'; }
+    else { tray.innerHTML=""; for(const p of pend){ const d=document.createElement("div"); d.className="pend"; d.innerHTML=`<span class="t">${esc(p.text)}</span><button class="ok" data-ok="${p.id}">✓ approve</button><button class="no" data-no="${p.id}">✗</button>`; tray.appendChild(d); } }
+    $("known").innerHTML = known.length ? known.slice(0,8).map(f=>`<div class="f"><b>✓</b> ${esc(f.text)}</div>`).join("") : "";
+  }
+  $("btnTeach").onclick = async ()=>{ const t=$("factIn").value.trim(); if(!t||!memory) return; $("factIn").value=""; await memory.proposeModel(t); renderMemory(); pushLine("memory","proposed: “"+t+"” — awaiting your approval","think"); };
+  $("factIn").addEventListener("keydown", e=>{ if(e.key==="Enter") $("btnTeach").onclick(); });
+  $("tray").addEventListener("click", async (e)=>{ const ok=e.target.dataset.ok, no=e.target.dataset.no;
+    if(ok&&memory){ await memory.approve(ok); renderMemory(); pushLine("memory","approved — she can ground replies with it now","motor"); }
+    else if(no&&memory){ await memory.reject(no); renderMemory(); } });
+
+  // --- brain (cognition): OFF by default; onboard-only unless a mouth is selected ---
+  let cog = null, cogTick = 0; const COG_EVERY = 4; // cognition cadence ≈ 12.5 Hz (every 4th body frame)
+  // Inline Ollama adapter (num_predict capped under options = gentle). Needs OLLAMA_ORIGINS=* on the daemon.
+  function ollamaMouth(model){ return { name:"ollama", async generate({system,messages,options}){
+    const body={ model, stream:false, messages:[...(system?[{role:"system",content:system}]:[]),...(messages||[])], options:{ num_predict:(options&&options.num_predict)||64, temperature:(options&&options.temperature)??0.7 } };
+    const res=await fetch("http://localhost:11434/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    if(!res.ok) throw new Error("ollama HTTP "+res.status); const d=await res.json(); return (d.message&&d.message.content)||""; }}; }
+  const currentMouth=()=> $("mouth").value==="ollama" ? ollamaMouth($("model").value.trim()||"gemma3:4b") : null;
+  const driveBar=(name,v,color)=>`<div class="bar" title="${name} ${(v||0).toFixed(2)}"><i style="width:${Math.round((v||0)*100)}%;background:${color}"></i></div>`;
+  function onSpeech(text,kind){ pushLine(kind==="emergency"?"!!":"her", text, kind==="emergency"?"emergency":"voice"); }
+  function onThought(f){ $("mArc").textContent=f.arc; $("mConf").textContent=(f.confidence??0).toFixed(2); $("mTarget").textContent=f.target?f.target.replace(/^the /,""):"—";
+    const d=f.drive||{}; $("mDrive").innerHTML=driveBar("threat",d.threat,"var(--err)")+driveBar("sensory",d.sensory,"var(--info)")+driveBar("memory",d.memory,"var(--accent)")+driveBar("reward",d.reward,"var(--ok)"); }
+  function onIdleThought(text){ pushLine("mind", text, "think"); }
+  $("btnBrain").onclick=()=>{
+    if(cog){ stopAuto(); cog.dispose(); cog=null; $("btnBrain").textContent="🧠 brain: off"; $("btnBrain").classList.remove("brainon"); $("mindState").textContent="— dormant —"; $("mindState").className="mind-off"; return; }
+    cog=makeCognition({ sim, backend:currentMouth(), memory, config:{ onSpeech, onThought, onIdleThought, onPropose:()=>renderMemory() } });
+    $("btnBrain").textContent="🧠 brain: on"; $("btnBrain").classList.add("brainon");
+    $("mindState").textContent=$("mouth").value==="ollama"?"awake · mouth ready":"awake · onboard-only"; $("mindState").className="mind-on";
+    pushLine("brain","cognition online — "+($("mouth").value==="ollama"?"onboard reflexes + ollama mouth (chat to speak)":"onboard reflexes only, fully offline"),"think");
+  };
+
+  // --- autonomy driver: off → 💤 watch (internal thoughts) → 🐾 roam (may look around) → off ---
+  let driver=null, autoMode=0; const AUTO=["off","watch","roam"];
+  const clockNow={ now:()=>performance.now() }; const defer=(fn,ms)=>{ const id=setTimeout(fn,ms); return ()=>clearTimeout(id); };
+  function startAuto(){ if(!cog||driver) return; const roam=()=>AUTO[autoMode]==="roam";
+    driver=makeIdleDriver({ clock:clockNow, defer, onIdleTurn:({kind,isCurrent})=>cog.idleTick({kind, roam:roam(), isCurrent}),
+      config:{ floorMs:250, ceilMs:1200, seedAvgGapMs:2000, seedGapVarMs:900, minGapVarMs:900, idleZ:1.0, aiFloorMs:2500, settleCycles:1 } });
+    driver.setSeedPicker(cog.seedPicker); driver.start(); }
+  function stopAuto(){ if(driver){ driver.stop(); driver=null; } autoMode=0; $("btnAuto").textContent="💤 autonomy: off"; $("btnAuto").classList.remove("brainon"); }
+  $("btnAuto").onclick=()=>{
+    if(!cog){ pushLine("!!","turn the brain on first — autonomy needs cognition","emergency"); return; }
+    autoMode=(autoMode+1)%3; const m=AUTO[autoMode];
+    if(m==="off"){ stopAuto(); pushLine("brain","autonomy off","think"); return; }
+    startAuto(); $("btnAuto").textContent=m==="watch"?"💤 autonomy: watch":"🐾 autonomy: roam"; $("btnAuto").classList.add("brainon");
+    pushLine("brain", m==="watch"?"autonomy on — she'll think to herself when left alone (internal only)":"autonomy on — she may look around when left alone (driving-frame)","think");
+  };
+
+  async function say(){ const t=$("chat").value.trim(); if(!t) return;
+    if(!cog){ pushLine("!!","turn the brain on first","emergency"); return; } $("chat").value=""; pushLine("you",t,"you");
+    if(driver) driver.notifyInput(); // a human turn resets the idle rhythm + preempts any in-flight idle turn
+    if($("mouth").value==="none"){ pushLine("brain","(no mouth connected — onboard reflexes run, but she can't form a spoken reply)","think"); return; }
+    try{ const r=await cog.converse(t); if(r.motor&&r.motor.length) pushLine("motor", r.motor.map(m=>`${m.tool}${m.ok?" ✓":" ✗("+m.reason+")"}`).join("   "),"motor"); }
+    catch(e){ pushLine("!!","mouth error: "+e.message+" — is Ollama up with OLLAMA_ORIGINS=* ?","emergency"); } }
+  $("btnSay").onclick=say; $("chat").addEventListener("keydown",e=>{ if(e.key==="Enter") say(); });
+
+  // --- the loop: 50Hz sim step + heartbeat while armed; cognition folded in at ~12.5Hz ---
+  setInterval(()=>{ if(armed) sim.command({type:"heartbeat"}); if(dragging||cmd.vx||cmd.vyaw) sim.command({type:"move",vx:cmd.vx,vy:0,vyaw:cmd.vyaw}); const f=sim.step(); render(f); if(cog && (++cogTick % COG_EVERY===0)) cog.step(); }, 20);
+
+  window.__sweetie = { sim, get armed(){return armed;}, get dragging(){return dragging;}, cmd, get cog(){return cog;}, get driver(){return driver;}, get memory(){return memory;}, drive(vx,vyaw){ cmd.vx=vx; cmd.vyaw=vyaw||0; } };
+</script>
+</body>
+</html>
